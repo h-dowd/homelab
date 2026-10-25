@@ -258,6 +258,23 @@ curl -s "http://$VM:8428/api/v1/query_range" \
   --data-urlencode 'query=sum(increase(alertmanager_notifications_failed_total{integration="webhook"}[10m]))' \
   --data-urlencode start=<from> --data-urlencode end=<to> --data-urlencode step=600
 
+# the other clocks for an internet outage. Where they disagree, the notify
+# failures above win.
+#   end:   a router restart is a ~2 min double "enp0s31f6: NIC Link is Down/Up"
+#          in `ssh pve 'journalctl -k'`, then a new WAN IP 5-7 min later in
+#          `ssh pve 'pct exec 101 -- cat /var/log/cloudflare-ddns.log'`.
+#          A re-IP with no NIC bounce and no notify failures is not an outage.
+#   start: chrony's "Can't synchronise" in `ssh pve 'journalctl -u chronyd'`,
+#          which lags the real start by hours.
+
+# firing AND pending alerts with their expressions (Alertmanager never sees
+# pending ones). vmalert only answers on its ClusterIP, not on localhost in the pod.
+VMA=$(kubectl -n monitoring get svc vmalert-vm-victoria-metrics-k8s-stack -o jsonpath='{.spec.clusterIP}')
+curl -s http://$VMA:8080/api/v1/alerts | python3 -c '
+import json,sys
+for a in json.load(sys.stdin)["data"]["alerts"]:
+    print(a["state"], a["name"], a["labels"].get("namespace",""), "|", a["expression"][:100].replace("\n"," "))'
+
 # when an alert fired and cleared, after Alertmanager has forgotten it
 curl -s "http://$VM:8428/api/v1/query_range" \
   --data-urlencode 'query=count by (alertname,namespace) (ALERTS{alertstate="firing",alertname=~"Backup.*"})' \

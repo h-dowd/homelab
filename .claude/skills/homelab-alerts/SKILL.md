@@ -1,190 +1,240 @@
 ---
 name: homelab-alerts
-description: Triage, fix and write up firing homelab alerts — list what Alertmanager/vmalert has firing, match each alert to a known lesson before diagnosing, remediate within the limits below, verify the alert set is back to baseline, then file the documentation the repo's rules require (lesson, recurrence, gotcha, known-risk). Use whenever Henry mentions alerts, alert emails or Pushover notifications, failed/missing backups, `KubeJobFailed`, `BackupJobFailed`, `PodCrashLooping` or any other alert name, or asks to "check the alerts".
+description: Triage, fix and write up any firing homelab alert (memory, workloads, reboots, storage, backups, Authelia, portfolio, or the chart's default Kube* rules). Read the rule, work out what its condition asserts and whether it still holds, match it against past lessons, find the cause, remediate within the limits below, verify, then file the documentation the repo's rules require (new lesson, recurrence, gotcha, known-risk, runbook). Use whenever Henry mentions alerts, an alert email or Pushover notification, an alert name (`PodOOMKilled`, `LonghornVolumeDegraded`, `KubeJobFailed`, …), or asks to "check the alerts".
 ---
 
 # Homelab alert triage
 
-Access first: load the `homelab-access` skill. `kubectl` runs on
-`ssh control-node`, never on the laptop. If SSH stalls right after
-`Server accepts key`, or fails with `agent refused operation`, the 1Password
-agent is waiting for Henry to approve or unlock. Say so and stop. Don't retry in
-a loop. When he says to prompt again, make one foreground attempt with a
-generous timeout so the approval dialog has time to appear. Run several
-commands per `ssh` call: each connection can need its own approval. Off the home LAN, the route in is
-the `homelab` NetworkManager WireGuard profile (`nmcli connection up homelab`).
-While it is up, the no-`pct enter` rule for LXC 101/102 applies.
+## 0. Access
 
-## 1. List what is firing
+Load the `homelab-access` skill. `kubectl` runs on `ssh control-node`, never on
+the laptop. Batch several commands into one `ssh` call. Each connection can
+need its own 1Password approval.
+
+- **SSH stalls after `Server accepts key`, or fails with `agent refused
+  operation`:** the 1Password agent is waiting for Henry to approve or unlock.
+  Say so and stop. Don't retry in a loop. When he says to prompt again, make one
+  foreground attempt with a generous timeout so the dialog has time to appear.
+- **Off the home LAN:** connect the `homelab` NetworkManager WireGuard profile
+  with `nmcli connection up homelab`, and say you did. While it is up, the
+  no-`pct enter` rule for LXC 101/102 applies.
+
+## 1. List what is firing, and what is about to
+
+Run on `control-node`:
 
 ```bash
-ssh control-node '
+# vmalert: firing + pending, with each rule's expression
+VMA=$(kubectl -n monitoring get svc vmalert-vm-victoria-metrics-k8s-stack -o jsonpath='{.spec.clusterIP}')
+curl -s http://$VMA:8080/api/v1/alerts | python3 -c '
+import json,sys
+for a in json.load(sys.stdin)["data"]["alerts"]:
+    print(a["state"], a["name"], a["labels"].get("namespace",""), "|", a["expression"][:100].replace("\n"," "))'
+
+# Alertmanager: what is being notified, and any silences
 P=vmalertmanager-vm-victoria-metrics-k8s-stack-0
-kubectl -n monitoring exec $P -c alertmanager -- \
-  amtool --alertmanager.url=http://localhost:9093 alert query'
-# -o extended dumps every annotation: tens of KB for a dozen alerts. Don't.
+AM="kubectl -n monitoring exec $P -c alertmanager -- amtool --alertmanager.url=http://localhost:9093"
+$AM alert query          # not -o extended: tens of KB of annotations
+$AM silence query
 ```
 
-**Baseline (always firing, by design):** `Watchdog`, `KubeCPUOvercommit`,
-`KubeMemoryOvercommit`. Anything beyond those three is the work. Done means
-the list is back to exactly those three, or Henry has agreed to leave
-something firing.
+**Baseline (always firing, by design):** `Watchdog`, `KubeCPUOvercommit` and
+`KubeMemoryOvercommit`. Anything else is the work. Done means only the baseline
+is left, or Henry has agreed to leave something firing.
 
-Alertmanager's state is short-lived (emptyDir, resets on pod restart). For
-*when* something fired, or what fired while you weren't looking, query the
-stored `ALERTS` series in vmsingle instead. The commands are in
-`docs/reference/operations.md`, Alerting: vmsingle's ClusterIP, `curl` from
-`control-node`.
+How alerts reach Henry: criticals go to Pushover and email, warnings to email,
+and `Watchdog` goes to the healthchecks.io deadman. Routes and inhibitions are in
+`k8s/infrastructure/victoria-metrics.yaml`. Alertmanager's state lives in an
+emptyDir and resets when the pod restarts. For history (when an alert started,
+or what fired and already resolved) query the stored `ALERTS` series in
+vmsingle (`docs/reference/operations.md`, Alerting). Delivery needs the
+internet, so an alert's arrival time is not when it fired.
 
-Notifications arrive late when the internet is down: email, Pushover and the
-healthchecks.io deadman all need external DNS. An alert's arrival time is not
-when it fired.
+## 2. Read the rule before you read the system
 
-## 2. Match before you diagnose
+Find the rule. Custom rules are in `k8s/apps/monitoring/homelab-rules.yaml`
+(`grep -n -A15 'alert: <Name>'`). Read its comments too, because they often
+record why it is shaped the way it is. Chart rules (`Kube*`, `Node*`, `Target*`, …)
+come from `defaultRules` in `k8s/infrastructure/victoria-metrics.yaml`, and
+vmalert's output above already shows their expressions.
 
-Most alerts here have fired before. Before you investigate, grep for the alert
-name:
+Then work out **what the expression asserts**. That decides what "fixed"
+means:
+
+| Shape | Examples | It clears when… | Trap |
+|---|---|---|---|
+| A state object exists | `KubeJobFailed`, `BackupJobFailed`, `DeploymentReplicasMismatch` | the object changes or is deleted | fixing the cause doesn't clear it. A failed Job is kept until deleted |
+| Rate over a window | `PodCrashLooping` (`increase[15m] > 3`) | the window slides past | can fire after recovery, e.g. a stale storm after a reboot |
+| Level / threshold | `NodeMemoryLow*`, `DiskFillingUp`, `LonghornProvisioningHeadroomLow` | capacity actually changes | raising a limit just to silence it moves the problem out a day |
+| Time since last success | `BackupJobMissing`, `NextcloudCronStale` | the next success | the cause may be long over |
+| Absence | `*MetricsAbsent`, `BackupJobsAbsent` | the series reappears | the pipeline may be fine and the series just lazily created (portfolio) |
+| Something happened | `NodeRebooted`, `ProxmoxHostRestarted`, `PodOOMKilled` | by itself, after the window | the alert is a pointer. The question is *why* it happened |
+
+**Run the expression in vmsingle now.** If it returns nothing, the condition
+is over and you are looking at a stale alert, a long `for:`, or a resolve still
+in flight.
+
+## 3. Match against what has happened before
 
 ```bash
-grep -rln '<AlertName>' docs/lessons docs/reference/gotchas.md
+grep -rln '<AlertName>' docs/lessons docs/reference/gotchas.md docs/reference/known-risks.md
 ```
 
-Known patterns, so you can recognise them on sight:
+Read `docs/lessons/README.md` for the one-line summaries. Patterns worth
+recognising on sight:
 
 | Alert(s) | Usual cause | Lesson |
 |---|---|---|
-| `BackupJobFailed` + `KubeJobFailed` + `BackupJobMissing`, all four namespaces, ~02:00–03:40 UTC | ISP outage over the backup window. The Jobs die ~10.5 / 1 / 12 / 10.5 min after start (nextcloud / gitea / immich / paperless). Seen 2026-10-20, 21, 22 | `backup/internet-outage-backups-failed.md` |
-| `BackupJobFailed` / `KubeJobFailed` that won't clear | Failed Job object retained forever (count-triggered history, no TTL on backups) | `k8s/kubejobfailed-isolated-failure-never-evicted.md` |
-| `KubeJobFailed` on `nextcloud-cron` | Ran during a node/control-plane restart. TTL clears it in 24h | same |
-| `PodCrashLooping` cluster ~20 min after a worker reboot, no `PodOOMKilled` | Longhorn reattach, benign | `k8s/worker-reboot-alert-storm.md` |
-| `NodeMemoryLowControl` hours after a reboot | bloated control-node `longhorn-manager` | same |
-| `LonghornVolumeDegraded` / faulted volumes | disk pressure blocking auto-salvage, or shutdown ordering | `storage/longhorn-autosalvage-blocked-diskpressure.md`, `storage/planned-reboot-longhorn-killed-under-writes.md` |
-| `PodOOMKilled` | check the pod's lesson (kiwix, file-parser, act-runner, grafana) | `k8s/*oom*` |
+| Several unrelated alerts in one burst | one shared event: a reboot, an internet outage, Longhorn, or the control plane gone | see step 4 |
+| `PodCrashLooping` ~20 min after a worker reboot, no `PodOOMKilled` | Longhorn reattach, benign, self-resolves | `k8s/worker-reboot-alert-storm.md` |
+| `NodeMemoryLowControl` hours after a reboot | bloated control-node `longhorn-manager`, bounce it | same |
+| `PodOOMKilled` | per-app: kiwix cache, file-parser page count, act-runner GC, grafana | `k8s/*oom*` |
+| `LonghornVolumeDegraded` / `LonghornDiskUnschedulable` | disk pressure blocking auto-salvage, or shutdown ordering | `storage/longhorn-autosalvage-blocked-diskpressure.md`, `storage/planned-reboot-longhorn-killed-under-writes.md` |
+| `KubeJobFailed` / `BackupJobFailed` that won't clear | failed Job retained forever (count-triggered history, and backups have no TTL) | `k8s/kubejobfailed-isolated-failure-never-evicted.md` |
+| `BackupJob*` in all namespaces, 02:00–03:40 UTC | internet down over the backup window | `backup/internet-outage-backups-failed.md` |
+| Job `DeadlineExceeded` long after its deadline | control plane was absent, not a hung job | gotchas.md, Monitoring |
 | `PortfolioMetricsAbsent` after a portfolio restart | lazy gauge, one real page load clears it | gotchas.md, Monitoring |
+| Control-plane `*Down` (scheduler, etcd, …) | k3s isn't kubeadm. Those rules are disabled, so if one appears, the config drifted | `k8s/k3s-control-plane-false-positives.md` |
 
-A match is a hypothesis, not a diagnosis. Confirm it with this incident's
-evidence before applying the old fix. The 2026-09-19 recurrence looked like
-the 09-02 one and had a different cause.
+A match is a hypothesis, not a diagnosis. Confirm it from this incident's
+evidence before applying the old fix. The 2026-09-19 `KubeJobFailed` looked
+like the 09-02 one and had a different cause.
 
-## 3. Diagnose
+## 4. Diagnose
 
-- **Cluster health first:** `kubectl get nodes`, non-Running pods outside
-  completed Jobs, Deployments ready. That tells you whether this is one
-  workload or the platform.
-- **Then the specific evidence:** Job conditions, pod logs, events, and
-  `kube_job_status_failed` / other series in vmsingle for exact times.
-- **Backup Jobs leave no logs** (`restartPolicy: OnFailure`, the pod is deleted
-  at `backoffLimit`). For outages, bracket the window from independent clocks:
-  - failed Alertmanager notifies. The container log rotates after ~3 days, so
-    use the stored `alertmanager_notifications_failed_total{integration="webhook"}`
-    series (operations.md, Alerting). It is the sharpest clock, ±10 min.
-  - the end of each outage: a router restart shows as a ~2 min double
-    `enp0s31f6: NIC Link is Down/Up` bounce in `ssh pve 'journalctl -k'`,
-    followed by a new WAN IP in
-    `ssh pve 'pct exec 101 -- cat /var/log/cloudflare-ddns.log'`
-    (never `pct enter`). A re-IP *without* a NIC bounce or notify failures is
-    not an outage.
-  - chrony on `pve` (`journalctl -u chronyd`), `Can't synchronise`. It lags the
-    start by hours.
-- **Confirm the cause is over** before re-running anything. For B2:
-  `curl -sS -o /dev/null -w '%{http_code}\n' https://s3.eu-central-003.backblazeb2.com/`
-  from `control-node` should return `403` quickly.
-- Write down dead ends as you go. They go in the doc.
+**Scope first.** `kubectl get nodes`, then the pods that aren't Running or
+Completed (`kubectl get pods -A | grep -vE 'Running|Completed'`), then
+`kubectl -n argocd get applications` for anything not Synced/Healthy. One
+workload, or the platform?
 
-## 4. Remediate
+**Then the timeline.** When did each alert start? Use the `ALERTS` series.
+Several alerts starting together point to a shared cause, so check these
+before investigating any single alert:
+- **a reboot.** `journalctl --list-boots` on the node or `pve`. A journal that
+  ends mid-line is an unclean stop. Check `NodeRebooted` / `ProxmoxHostRestarted`
+  history.
+- **the internet.** Alertmanager logs `lookup … server misbehaving` for
+  Brevo, Pushover and hc-ping. Bracket the outage as in operations.md
+  (Alerting: notify-failure series, NIC bounce + ddns, chrony).
+- **storage.** `kubectl -n longhorn-system get volumes.longhorn.io`, plus disk
+  conditions on `nodes.longhorn.io`.
+- **the control plane.** Job and lease timestamps that jump all at once.
 
-**Do without asking**: these are the documented fixes, and reversible:
-- Re-run a failed backup or cron Job, **unless a later scheduled run in that
-  namespace has already completed**. Then the backup has recovered, and
-  re-running only adds a snapshot (and Gitea downtime). Check the logs of the
-  latest `Complete` Job for `snapshot … saved`. Otherwise re-run:
-  `kubectl -n <ns> create job --from=cronjob/<ns>-backup <ns>-backup-manual-$(date +%s)`.
-  The gitea backup scales Gitea to 0 for ~1.5 min. immich takes the longest (~15 min).
-- Once the re-run is `Complete`, delete the failed Jobs that are keeping
-  `BackupJobFailed` / `KubeJobFailed` up, **only** if their pods are already gone
-  (`kubectl -n <ns> get pods -l job-name=<job>` is empty). If logs still exist,
-  save them to the scratchpad first.
-- Bounce a stateless pod a lesson says to bounce (for example `longhorn-manager`).
+**Evidence by area:**
+
+| Area | Look at |
+|---|---|
+| Pods / workloads | `kubectl describe pod` (Last State, Reason, Events), `logs --previous`, `get events -n <ns> --sort-by=.lastTimestamp` |
+| Memory | `kubectl top`, `container_memory_working_set_bytes` over time (a sawtooth means it will recur), cgroup `rss` vs `cache` split (kiwix lesson) |
+| Nodes / host | `ssh worker-node` / `ssh pve`: `journalctl -b -1 -e`, `free`, `df`. On pve also `zfs list`, the `lvs` thin pool, `qm status` |
+| Storage | Longhorn volume / replica / engine CRs, `df /mnt/longhorn` on the worker, the PVC's events |
+| Jobs / backups | Job conditions and their timestamps (`kubectl get job -o yaml`), whether pods survive (backup pods often don't: `OnFailure`), `kube_job_status_*` series, `snapshot … saved` in the logs |
+| Ingress / auth | `curl -H 'Host: <h>' http://192.168.1.200/ -I` (operations.md "When something looks wrong"), Authelia pod logs |
+| GitOps drift | `kubectl -n argocd get app <a> -o yaml`, which shows sync status and `ComparisonError`. The live spec may not be the repo's (`argocd-comparisonerror-silent-values.md`) |
+
+**Confirm the cause is over** before re-running or restarting anything.
+Note dead ends as you go, because they go in the doc.
+
+## 5. Remediate
+
+**Do without asking** (documented fixes, reversible):
+- anything read-only
+- re-run a failed Job with `kubectl -n <ns> create job --from=cronjob/<cj> <cj>-manual-$(date +%s)`,
+  unless a later scheduled run has already completed (check its logs). A
+  backup re-run scales Gitea to 0 for ~1.5 min. immich takes ~15 min.
+- delete a failed Job that is keeping a state-object alert up, once the cause
+  is fixed and **only** if its pods are gone (`kubectl -n <ns> get pods -l job-name=<job>`).
+  If logs survive, save them to the scratchpad first.
+- restart a stateless pod that a lesson says to restart (for example
+  `longhorn-manager` on the control node)
+- trigger a series that is created lazily (one real portfolio page load)
 
 **Ask Henry first:**
-- any silence (it hides the next real alert, and is lost on Alertmanager restart)
-- any manifest, VMRule or Alertmanager config change (it's GitOps, so it means
-  a commit, which ArgoCD then applies)
-- deleting or restarting anything that holds state or still has logs
-- node, VM or Proxmox host reboots, Longhorn replica surgery, anything in LXC 101
+- a silence. It hides the next real alert, and it is lost when Alertmanager restarts.
+- any manifest, VMRule, values or Alertmanager change. It's GitOps, so it means
+  a commit that ArgoCD applies.
+- raising a memory, CPU or disk limit. Find out why usage grew first, and offer
+  the fix for that.
+- restarting or deleting anything stateful, a PVC, or anything that still has logs
+- node, VM or Proxmox host reboots, Longhorn replica or volume surgery, anything
+  in LXC 101, the router, Cloudflare or DNS
 - muting or disabling a rule. Prove the component is healthy first
-  (`k3s-control-plane-false-positives.md`)
+  (`k3s-control-plane-false-positives.md`).
 
-Prevention work a lesson lists as "proposed, not yet applied" is Henry's call.
-Point out that it recurred and what that costs. Don't implement it unasked.
+Prevention that a lesson marks "proposed, not yet applied" is Henry's call.
+Tell him it recurred and what that cost. Don't implement it unasked.
 
-## 5. Verify
+## 6. Verify
 
-Re-run step 1. The firing list should be back to the three baseline alerts.
-After a Job delete, kube-state-metrics drops the series at once, but vmsingle
-keeps returning the last sample for ~5 min, so the alert takes 5–10 min to
-resolve. Wait with one background `until` loop inside a single `ssh`; don't
-poll. For backups, also confirm each manual Job is `Complete` and that
-its log ends with a snapshot dated today, and that Gitea is back
-(`kubectl -n gitea rollout status deploy/gitea`).
-`BackupJobMissing` clears by itself once a backup succeeds.
-ArgoCD's CronJob `Degraded` only clears on a successful *scheduled-or-manual*
-run, and deleting Jobs does not clear it.
+- The rule's expression returns nothing in vmsingle, vmalert shows it inactive,
+  and `amtool alert query` is back to the baseline.
+- **The thing works, not just the alert.** Load the page, open a file, check the
+  Job's log for its success line. A 200 is not a smoke test
+  (`k8s/homepage-prerender-erofs.md`).
+- Resolution lags. After a deleted object or a recovered pod, vmsingle keeps
+  returning the last sample for ~5 min, so expect 5–10 min before Alertmanager
+  resolves. Wait with one background `until` loop inside a single `ssh`. Don't
+  poll by hand.
+- Some things don't clear the way you'd expect. ArgoCD's CronJob `Degraded`
+  only clears after a successful run. Deleting Jobs or a hard refresh doesn't
+  clear it.
 
-## 6. Document
+## 7. Document
 
-The canonical rules are in `docs/README.md`. Read it if anything below seems
-to conflict, and follow it. This section applies those rules to alert work.
+The canonical rules are in `docs/README.md`. If anything below seems to
+conflict with them, they win. This section applies them to alert work.
 
 ### When, and where
 
 | What the triage found | Write | Where |
 |---|---|---|
-| A **new** failure mode: downtime, data risk, or over ~30 min of diagnosis | A new lesson from `docs/lessons/TEMPLATE.md` | `docs/lessons/<domain>/<short-kebab-name>.md`, plus a row in `docs/lessons/README.md`, plus a one-paragraph entry in `docs/reference/gotchas.md` under the right section linking to it. All three, or it's a filing error |
-| A **known** failure mode recurring, cause confirmed the same | A `## Recurrence: YYYY-MM-DD` section appended to the existing lesson: what fired, the window, what (if anything) differed, the commands run. Keep it short if nothing new was learned. It still counts, because the recurrence count is what prioritises the prevention work | the existing lesson. Update its `## Status` line and its `docs/lessons/README.md` summary (add "Recurred YYYY-MM-DD") |
-| Known alert, **different** cause | A new lesson, cross-linked both ways under `## Related` | as for a new failure mode |
-| The incident changes a risk's likelihood, cost or status | An `**Updated YYYY-MM-DD.**` paragraph in the item, and the dated changelog sentence at the top of the file | `docs/reference/known-risks.md` |
-| You ran a multi-step procedure for the second time | A runbook, or a section in an existing one | `docs/runbooks/` plus its README row |
-| A command you had to work out that the next triage will need | Add it to the relevant section | `docs/reference/operations.md` |
-| A manifest or rule fix | A comment beside the changed lines saying why. The lesson links the commit | the manifest |
-| A pure baseline/benign alert that matched a lesson exactly and needed no action | Nothing, unless it is the 3rd+ time this quarter, in which case a recurrence entry noting the frequency | — |
+| A **new** failure mode: downtime, data risk, or over ~30 min of diagnosis | a new lesson from `docs/lessons/TEMPLATE.md` | `docs/lessons/<domain>/<short-kebab-name>.md` (domains: infra, k8s, networking, storage, backup), plus a row in `docs/lessons/README.md`, plus a one-paragraph entry in the right section of `docs/reference/gotchas.md` linking to it. All three, or it's a filing error |
+| A **known** failure mode recurring, same cause confirmed | a `## Recurrence: YYYY-MM-DD` section at the end of the existing lesson: what fired, the window, what differed, the commands run. Keep it short if nothing new was learned. It still counts, because the recurrence count is what prioritises prevention | the existing lesson. Update its `## Status` and its `docs/lessons/README.md` row ("Recurred YYYY-MM-DD") |
+| A known alert with a **different** cause | a new lesson, cross-linked both ways under `## Related` | as for a new failure mode |
+| The incident changes a risk's likelihood, cost or status | an `**Updated YYYY-MM-DD.**` paragraph in the item, plus the dated sentence in the file's opening changelog | `docs/reference/known-risks.md` |
+| An alert that is wrong (false positive, wrong threshold, wrong scope) | the rule fix (ask first), with a comment beside it saying why, and a lesson if it cost real time | `homelab-rules.yaml` or the values file |
+| A procedure you ran for the second time | a runbook, or a section in an existing one | `docs/runbooks/` plus its README row |
+| A command you had to work out that the next triage will need | add it to the relevant section | `docs/reference/operations.md` |
+| A manifest or rule fix | a comment beside the changed lines saying why. The lesson links the commit | the manifest |
+| A benign alert that matched a lesson exactly and needed no action | nothing, unless it's the 3rd+ time this quarter. Then a recurrence entry noting the frequency | — |
 
-Also check whether *this skill's* known-patterns table needs a row. If you
-wrote a new lesson for an alert that will fire again, it does.
+Then check whether step 3's table in *this skill* needs a row. If you wrote a
+new lesson for an alert that will fire again, it does.
 
 ### Style
 
-- **Follow the template's headings, in order.** Date · Time lost · Status ·
+- **Use the template's headings, in order:** Date · Time lost · Status ·
   Context · Symptoms · Investigation · Root cause · Fix · Verification ·
-  Prevention · Related. Recurrence sections reuse the same sub-headings at `###`.
+  Prevention · Related. Recurrence sections reuse them as `###`.
 - **Run the revision pass** in `docs/reference/human-register-revision-guide.md`
-  §12 before committing. These are technical docs, so the §11 exemptions apply:
+  §12 before committing. These are technical docs, so §11's exemptions apply:
   bullets, tables and repeated key terms stay. Numbers, names, commands, alert
   names and log lines are never reworded for style.
-- **Absolute dates (`YYYY-MM-DD`), times in UTC.** When a schedule is in
-  `Europe/Dublin`, give both (`03:00 Europe/Dublin = 02:00 UTC (IST)`). Never
+- **Absolute dates (`YYYY-MM-DD`), times in UTC.** For `Europe/Dublin`
+  schedules give both (`03:00 Europe/Dublin = 02:00 UTC (IST)`). Never
   "yesterday" or "last night".
-- **Evidence over narrative:** real log lines in ` ```text ` blocks, trimmed to
-  the smoking gun. Real alert names, Job names, timestamps, and the commands
-  that actually ran, with their output.
-- **Say how you know.** If something is inferred and not observed, write "inferred
-  from …, not from logs". The investigation section includes the dead ends.
+- **Evidence over narrative.** Real log lines in ` ```text ` blocks, trimmed to
+  the smoking gun. Real alert, pod and Job names, timestamps, and the commands
+  that actually ran.
+- **Say how you know.** Write "inferred from …, not from logs" where that's
+  true. Include the dead ends.
 - **Root cause is a mechanism**, not "it broke". Prevention takes a position:
-  a specific change, or "accepted risk", with the reason.
-- **No version numbers in docs.** Point at the manifest (`grep -rn targetRevision k8s/`).
-- Don't restate what another doc already says. Link it.
+  a specific change, or "accepted risk" and why.
+- **No version numbers in docs.** Point at the manifest
+  (`grep -rn targetRevision k8s/`). Don't restate another doc. Link it.
 
 ### Committing
 
-Commit only the files this triage touched, staged by path. The working tree
-often holds Henry's unrelated in-progress work, so never use `git add -A` or
-`git commit -a`. Run `git status` / `git diff` before you edit. If a file you
+Commit only the files this triage touched, staged by path. Never use
+`git add -A` or `git commit -a`, because the working tree often holds Henry's
+unrelated work. Run `git status` / `git diff` before you edit. If a file you
 need already has his uncommitted hunks (gotchas.md and known-risks.md often
-do), you can't use `git add <file>`, and `git add -p` is interactive. Stage
-your hunks alone instead: apply the same edits to `git show HEAD:<file>` in the
-scratchpad, then
-`git update-index --cacheinfo 100644,$(git hash-object -w <tmp>),<file>`.
-Check with `git diff --cached`, and confirm `git diff` still shows his hunks. Messages follow `docs/README.md`: terse lowercase one-liner,
-`docs: <what> -- <load-bearing why>`, for example
-`docs: backup outage recurrence 10-25 -- isp drop over backup window again`.
+do), `git add <file>` would take them too, and `git add -p` is interactive.
+Instead, apply the same edits to `git show HEAD:<file>` in the scratchpad, then
+`git update-index --cacheinfo 100644,$(git hash-object -w <tmp>),<file>`. Check
+with `git diff --cached`, and confirm `git diff` still shows his hunks.
+
+Messages follow `docs/README.md`: a terse lowercase one-liner,
+`docs: <what> -- <load-bearing why>`, e.g.
+`docs: kiwix oom recurrence 11-02 -- bot crawl again, cache bound holding`.
 Commit once the docs are written and verified. Ask before pushing.

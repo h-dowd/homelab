@@ -9,7 +9,9 @@ grew back to 14GiB on 2026-08-20), item 12 closed, item 13 opened. Updated 2026-
 after the `pve/data` thin pool filled and froze the control plane: §10 opened, §3's
 "resolved" corrected, §7 reframed as the same failure one layer up. Updated 2026-10-09:
 §2, §9 and items 3, 13 and 18 closed (ADR 019). Updated 2026-10-20: §4's figures refreshed
-for the 13GiB worker, and §11 and item 19 opened for the host's 100 Mb/s link.
+for the 13GiB worker, and §11 and item 19 opened for the host's 100 Mb/s link. Updated
+2026-10-25: §11's link-drop record extended with the 10-21/22 outages that failed two more
+nights of backups.
 
 Ordered by expected damage, not by how likely they are.
 
@@ -634,6 +636,20 @@ The link also dropped three times on 2026-10-20, at 08:00, 15:22 and 19:58 UTC, 
 minutes each. Every drop was followed within 10 minutes by a new WAN IP in the
 cloudflare-ddns log, which points at the router restarting rather than the cable. Drops
 without a WAN IP change would point back at the cable.
+
+**Updated 2026-10-25.** Five more drops followed between 2026-10-21 and 10-22, with the
+same signature. Each time the host NIC went down for ~2 min, came up, dropped for ~20 s,
+then came up again, and a new WAN IP followed 5–7 min later. The NIC bounces are the
+*end* of each outage, not the outage itself. Alertmanager's failed notifies show the
+internet was already out for hours before each one, from ~01:00 to 09:30 UTC on 10-21
+and from ~22:50 on 10-21 to 08:35 on 10-22, plus ~6h on the afternoon of 10-22. The two
+overnight outages covered the backup window, and every backup failed on both nights
+(`docs/lessons/backup/internet-outage-backups-failed.md`). So the pattern is "internet
+down until the router restarts", not a short blip. It isn't known whether the router
+restarts itself or someone power-cycles it. Both overnight outages ended at about 10:30
+local time. If it's a manual power-cycle, an overnight outage lasts until someone gets up.
+Nothing further since: the WAN IP changes at 10-24 05:20 and 10-25 04:20 UTC had no NIC
+bounce and no failed notifies.
 
 ---
 

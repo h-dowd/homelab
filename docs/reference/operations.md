@@ -249,6 +249,20 @@ $AM silence query
 kubectl -n monitoring exec $P -c alertmanager -- wget -qO- localhost:9093/metrics \
   | grep -E '^alertmanager_notifications_(total|failed_total)'
 
+# when was the internet down? The container log rotates after ~3 days, but the
+# stored series lasts 30d. Watchdog pings fail on every attempt while DNS is
+# out, so nonzero 10m buckets bracket each outage to ±10 min.
+# Run on control-node; vmsingle's ClusterIP is reachable from the node.
+VM=$(kubectl -n monitoring get svc vmsingle-vm-victoria-metrics-k8s-stack -o jsonpath='{.spec.clusterIP}')
+curl -s "http://$VM:8428/api/v1/query_range" \
+  --data-urlencode 'query=sum(increase(alertmanager_notifications_failed_total{integration="webhook"}[10m]))' \
+  --data-urlencode start=<from> --data-urlencode end=<to> --data-urlencode step=600
+
+# when an alert fired and cleared, after Alertmanager has forgotten it
+curl -s "http://$VM:8428/api/v1/query_range" \
+  --data-urlencode 'query=count by (alertname,namespace) (ALERTS{alertstate="firing",alertname=~"Backup.*"})' \
+  --data-urlencode start=<from> --data-urlencode end=<to> --data-urlencode step=600
+
 # last result of the VPN check in LXC 101
 ssh pve 'pct exec 101 -- cat /tmp/vpn-healthcheck.last'
 ```

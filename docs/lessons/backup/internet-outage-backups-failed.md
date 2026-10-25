@@ -8,7 +8,9 @@
 repos; no data lost, and every repo has a fresh snapshot the same day.
 
 ## Status
-Resolved. Prevention proposed below, not yet implemented.
+Resolved. Recurred on the next two nights (2026-10-21 and 2026-10-22, see
+Recurrence below), so three nights failed in a row. Prevention proposed below,
+not yet implemented.
 
 ## Context
 - **System / component:** the four restic→B2 backup CronJobs (`nextcloud`,
@@ -158,3 +160,99 @@ scales Gitea down for ~1.5 min.
 - Lessons: `docs/lessons/backup/paperless-backup-unmonitored.md` (why all four namespaces alerted, not three)
 - ADR: `docs/adr/004-restic-b2-bckup.md`, `docs/adr/019-pushover-critical-alerts.md`
 - Runbook: `docs/runbooks/backup-verification.md`
+
+## Recurrence: 2026-10-21 and 2026-10-22
+
+The same failure on each of the next two nights. The alerts stayed up from
+2026-10-21 until they were cleared on 2026-10-25. Triage took ~1h.
+
+### Symptoms
+Sixteen alerts on top of the baseline three: `BackupJobFailed` and
+`KubeJobFailed` once per namespace per night, at the same minutes as on 10-20
+(02:12, 02:32, 03:13, 03:42 UTC, each `KubeJobFailed` 14 min later).
+`BackupJobMissing` fired for all four from ~21:00 on 10-21, 27h after the 10-20
+manual re-runs finished. It cleared between 02:00 and 03:30 on 10-23, as the
+scheduled runs succeeded.
+
+### Investigation
+- **The backups had already recovered.** All four completed on 10-23, 10-24
+  and 10-25, and each latest log ends in `snapshot … saved`. Nothing needed
+  re-running. Only the eight failed Job objects were keeping the alerts up, and
+  their pods were already gone.
+- **Same signature as 10-20.** Every Job hit `BackoffLimitExceeded` the same
+  number of seconds after its start as the 10-20 one did:
+
+  | Job | 10-21 failed | 10-22 failed |
+  |---|---|---|
+  | nextcloud (02:00) | 02:10:34 | 02:10:34 |
+  | gitea (02:30) | 02:31:02 | 02:30:57 |
+  | immich (03:00) | 03:12:01 | 03:11:51 |
+  | paperless (03:30) | 03:40:31 | 03:40:36 |
+
+  From the scripts and the timing, this is the `apk add` failure described
+  above. There are no logs to confirm it from.
+- **The Alertmanager log had rotated.** It only reached back to 10-22 17:1x
+  UTC, so it could not bracket either backup night. The stored metric can,
+  because vmsingle keeps 30 days. The Watchdog webhook pings to healthchecks.io
+  fail on every attempt while DNS is down, so failed webhook sends are a
+  continuous signal:
+  ```text
+  sum(increase(alertmanager_notifications_failed_total{integration="webhook"}[10m]))
+  ```
+  Each window below is accurate to ±10 min:
+
+  | Notify failures (UTC) | Host NIC bounce | New WAN IP (ddns) | Hit |
+  |---|---|---|---|
+  | 10-20 ~19:40 → 19:58 | 19:58 | 20:05 | nothing scheduled |
+  | 10-21 ~01:00 → 09:30 | 09:30 | 09:35 | **all four backups** |
+  | 10-21 ~16:00 → 16:18 | 16:18 | 16:25 | nothing scheduled |
+  | 10-21 ~18:40 → 18:42 | 18:42 | 18:50 | nothing scheduled |
+  | 10-21 ~22:50 → 10-22 08:35 | 08:35 | 08:40 | **all four backups** |
+  | 10-22 ~14:20 → 20:20 | 20:20 | 20:25 | nothing scheduled |
+
+- **Every outage ended with a router restart.** On `pve`, `journalctl -k` shows
+  the same pattern each time: `enp0s31f6: NIC Link is Down` for ~2 min, up for
+  ~20 s, down for ~20 s, then up again. A new WAN IP followed 5–7 min later.
+  That is the LAN port going away and coming back, which is the router
+  restarting. The journal doesn't show whether the router restarted itself or
+  someone power-cycled it. Both backup-night outages ended at about 09:30 UTC
+  (10:30 local), which fits someone noticing in the morning.
+- **Not every re-IP is an outage.** The ddns log also shows new WAN IPs at
+  10-24 05:20 and 10-25 04:20 UTC, with no NIC bounce and no failed notifies.
+  Those backup nights succeeded.
+- chrony's `Can't synchronise: no selectable sources` arrived at 10-21 03:34
+  and 10-22 01:24 UTC. It lagged the start of each outage, as on 10-20.
+
+### Fix
+Deleted the failed Jobs. No re-run, because a later scheduled run had already
+succeeded in every namespace:
+
+```bash
+ssh control-node '
+kubectl -n nextcloud delete job nextcloud-backup-29875800 nextcloud-backup-29877240
+kubectl -n gitea     delete job gitea-backup-29875830 gitea-backup-29877270
+kubectl -n immich    delete job immich-backup-29875860 immich-backup-29877300
+kubectl -n paperless delete job paperless-backup-29875890 paperless-backup-29877330'
+```
+
+### Verification
+```bash
+# kube-state-metrics stops exporting them immediately:
+curl -s 10.42.1.7:8080/metrics | grep -cE '^kube_job_failed\{.*backup'   # 0
+# vmsingle keeps returning the last sample for ~5 min, then the alerts resolve.
+# amtool alert query → Watchdog, KubeCPUOvercommit, KubeMemoryOvercommit only
+```
+
+### Prevention
+- **None of the three changes proposed above have been applied, and this is
+  now three failed nights in a row.** The case for 1 (`restartPolicy: Never`)
+  is stronger: two more nights were diagnosed with no logs at all.
+- **A daytime catch-up attempt would have saved both nights.** These outages
+  ran from ~01:00 and ~22:50 to 08:35–09:30 UTC, so no retry inside the night
+  window could outlast them. The 2h pre-flight wait in item 3 would not have
+  either. A second attempt around midday, which runs only if that day's backup
+  has not succeeded, would have caught both. Proposed, not applied.
+- **Delete the failed Jobs as soon as a later run succeeds.** A successful run
+  does not clear `BackupJobFailed` or `KubeJobFailed`. These kept
+  re-notifying for four days about backups that had recovered on 10-23.
+- The link itself is tracked in `docs/reference/known-risks.md` §11.

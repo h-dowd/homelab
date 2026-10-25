@@ -516,7 +516,9 @@ backstop. See ADR 020.
   Retry budgets are minutes, so any outage over the
   02:00–03:40 UTC window fails all four. Re-run with `kubectl create job
   --from=cronjob/<ns>-backup`, then delete the failed Jobs or `BackupJobFailed`
-  / `KubeJobFailed` never clear. See
+  / `KubeJobFailed` never clear. A later successful run doesn't clear them
+  either: after the 2026-10-21 and 10-22 failures they re-notified for four
+  days about backups that had recovered on 10-23. See
   `docs/lessons/backup/internet-outage-backups-failed.md`.
 
 ## LVM thin pool (`local-lvm`)

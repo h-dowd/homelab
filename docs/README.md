@@ -14,6 +14,7 @@ knowledge goes and the rules that keep the docs trustworthy.
 | a fact you keep looking up | `reference/` | when you notice the repeat lookup |
 | a pointer to upstream (charts, images, docs, release notes) | `reference/resources.md` | when a new component is added |
 | a multi-step build that hasn't happened yet | `plans/` | when the work is scoped; a plan that's been executed should say so at the top and point to the ADR/lessons it produced |
+| a rule or procedure for how Claude Code works in this repo | `CLAUDE.md` (rules for every task) or `.claude/skills/<name>/SKILL.md` (a procedure) | when a correction would otherwise have to be repeated next session |
 
 If it's none of these, it probably belongs in a manifest comment next to the
 thing it describes, constraints live closest to what they constrain (see the
@@ -37,7 +38,13 @@ thing it describes, constraints live closest to what they constrain (see the
   a rewrite.
 - **Commit messages are terse lowercase one-liners:** what changed and the
   load-bearing why, e.g. `traefik: disable 60s readTimeout (v3 default) --
-  killed lan uploads >60s`. No prose bodies, no trailers.
+  killed lan uploads >60s`. No prose bodies, no trailers, not even
+  `Co-Authored-By`.
+- **`CLAUDE.md` and `.claude/skills/` are committed.** They apply these
+  rules to Claude Code sessions and never override them; where one
+  disagrees with this page, this page wins and the skill is fixed. Their
+  reader is a model, so the revision guide's section 11 machine-reader row
+  applies. Changes to them commit as `claude: …`.
 - **`HOMELAB.md` is gitignored on purpose.** It's the machine-local context
   file for AI-assisted sessions, kept current, never committed. Nothing in
   the repo may depend on it; anything durable in it that humans need must

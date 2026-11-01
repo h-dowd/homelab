@@ -520,7 +520,7 @@ empty, `available: false`), which is fine given restic covers the data.
 **Correction (2026-07-26).** The "102 snapshots in the nextcloud repo" cited here as evidence
 of health was the opposite: retention had never pruned anything, because `restic forget`
 groups by `host,paths` by default and the hostname is the per-run pod name. Fixed in
-`c1b81b3`; see `docs/lessons/backup/restic-retention-never-pruned.md`. The reading error is
+`769b3fe`; see `docs/lessons/backup/restic-retention-never-pruned.md`. The reading error is
 worth keeping visible, a large snapshot count says a repo is growing, not that it is well
 kept, and this review took it for the latter.
 

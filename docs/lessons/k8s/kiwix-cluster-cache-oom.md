@@ -9,7 +9,7 @@
 ## Status
 Resolved
 
-Root cause confirmed, fix synced via ArgoCD (`5d966ab`) and load-tested
+Root cause confirmed, fix synced via ArgoCD (`3e3b4a1`) and load-tested
 against the running pod — anon memory plateaus at ~202MiB under load heavier
 than real traffic, against a 768Mi limit. Worth noting the alert had already
 "self-resolved" on its own before any of this: the pod restarted and came back
@@ -115,7 +115,7 @@ default to ~10% of book count, which is negligible at 12 books. Search turned
 out to be the larger half of the footprint, but it bounds itself at ~202 MiB,
 so there was nothing to buy by tuning them.
 
-Applied via ArgoCD auto-sync on push (`5d966ab`).
+Applied via ArgoCD auto-sync on push (`3e3b4a1`).
 
 ## Verification
 Done so far — that the var name is real for *this* build, rather than trusting

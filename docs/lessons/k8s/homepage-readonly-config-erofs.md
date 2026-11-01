@@ -65,7 +65,7 @@ Make `/app/config` **writable** and stop trying to enumerate homepage's files:
 - ConfigMap slimmed to just those 4 authored files; the empty
   docker/kubernetes/custom.* placeholders were deleted.
 - `readOnlyRootFilesystem: true` is retained — only `/app/config` and
-  `/app/.next/cache` are writable emptyDirs. Commit `78ccf8e`.
+  `/app/.next/cache` are writable emptyDirs. Commit `b85946a`.
 
 ## Verification
 ```

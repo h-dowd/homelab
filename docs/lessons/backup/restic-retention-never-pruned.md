@@ -9,7 +9,7 @@ clearing an unrelated alert. The cost was silent: ~51 days of unpruned snapshots
 across three repos.
 
 ## Status
-Resolved in the manifests (commit `c1b81b3`). The first real prune runs on tonight's
+Resolved in the manifests (commit `769b3fe`). The first real prune runs on tonight's
 schedule, so the snapshot counts below are still live until then.
 
 ## Context
@@ -108,7 +108,7 @@ both were present in nextcloud.
 
 ## Fix
 
-`--group-by tags` on every forget, in all three CronJobs (commit `c1b81b3`). Each forget is
+`--group-by tags` on every forget, in all three CronJobs (commit `769b3fe`). Each forget is
 already filtered to a single `--tag`, so grouping by tag collapses the whole series into one
 group and the keep policy means what it says:
 

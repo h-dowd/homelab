@@ -54,7 +54,7 @@ fine. `/print` re-opens the workbook to keep only the Incidents sheet, and
 failed. Data-dependent, which is why it stayed hidden for three months.
 
 ## Fix
-file-parser `a60408b`, deployed as `sha-a60408b` (homelab `d565dd3`):
+file-parser `a60408b`, deployed as `sha-a60408b` (homelab `ad1f5e4`):
 - `_pdfium_page_view`: map `'￾'` back to `-`, so the output matches pdfplumber.
 - `write_xlsx`: run every row/skipped value through `_xml_safe()` first, which
   strips everything XML 1.0 forbids (C0 controls except tab/LF/CR, lone

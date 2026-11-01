@@ -7,7 +7,7 @@
 ~45 min to diagnose. The fault itself sat unnoticed for 13 days.
 
 ## Status
-Fixed and verified. `forwardauth-noauthz` middleware, commit `6a045f0`.
+Fixed and verified. `forwardauth-noauthz` middleware, commit `92b8399`.
 
 ## Context
 - **System / component:** `amp.henrydowd.dev`, gated by Authelia ForwardAuth

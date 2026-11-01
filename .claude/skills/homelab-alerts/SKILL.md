@@ -92,6 +92,7 @@ recognising on sight:
 | `LonghornVolumeDegraded` / `LonghornDiskUnschedulable` | disk pressure blocking auto-salvage, or shutdown ordering | `storage/longhorn-autosalvage-blocked-diskpressure.md`, `storage/planned-reboot-longhorn-killed-under-writes.md` |
 | `KubeJobFailed` / `BackupJobFailed` that won't clear | failed Job retained forever (count-triggered history, and backups have no TTL) | `k8s/kubejobfailed-isolated-failure-never-evicted.md` |
 | `BackupJob*` in all namespaces, 02:00–03:40 UTC | internet down over the backup window | `backup/internet-outage-backups-failed.md` |
+| `BackupJobFailed` in one namespace, `DeadlineExceeded`, internet up | `apk add restic` stalled mid-download with no timeout. Raw rx bytes flat under ~3 MB | `backup/apk-add-hang-no-timeout.md` |
 | Job `DeadlineExceeded` long after its deadline | control plane was absent, not a hung job | gotchas.md, Monitoring |
 | `PortfolioMetricsAbsent` after a portfolio restart | lazy gauge, one real page load clears it | gotchas.md, Monitoring |
 | Control-plane `*Down` (scheduler, etcd, …) | k3s isn't kubeadm. Those rules are disabled, so if one appears, the config drifted | `k8s/k3s-control-plane-false-positives.md` |

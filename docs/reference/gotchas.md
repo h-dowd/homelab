@@ -520,6 +520,17 @@ backstop. See ADR 020.
   either: after the 2026-10-21 and 10-22 failures they re-notified for four
   days about backups that had recovered on 10-23. See
   `docs/lessons/backup/internet-outage-backups-failed.md`.
+- **`apk add` has no timeout, so a stalled download hangs a backup until its
+  deadline.** Every backup script installs restic at runtime from
+  `dl-cdn.alpinelinux.org`. On 2026-11-01 the paperless one stopped receiving
+  20 s in, halfway through the package index, and sat idle until
+  `activeDeadlineSeconds` (4h) failed it with `DeadlineExceeded`. It never
+  restarted, it left no logs, and the internet was up the whole time. To tell
+  this from an outage, read the pod's raw `container_network_receive_bytes_total`
+  (operations.md, Backups): flat below ~3 MB means the install never got past
+  the index. `gitea-backup` has no deadline at all, so the same stall there
+  would keep the Job active and `concurrencyPolicy: Forbid` would skip every
+  later night. See `docs/lessons/backup/apk-add-hang-no-timeout.md`.
 
 ## LVM thin pool (`local-lvm`)
 

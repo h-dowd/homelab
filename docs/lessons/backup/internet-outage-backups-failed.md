@@ -158,6 +158,7 @@ scales Gitea down for ~1.5 min.
 - Lessons: `docs/lessons/k8s/kubejobfailed-isolated-failure-never-evicted.md` (why the failed Jobs had to be deleted)
 - Lessons: `docs/lessons/infra/power-cuts-host-stayed-off.md` (the ddns log as a record of when the link or router dropped)
 - Lessons: `docs/lessons/backup/paperless-backup-unmonitored.md` (why all four namespaces alerted, not three)
+- Lessons: `docs/lessons/backup/apk-add-hang-no-timeout.md` (the same `apk add` step hanging instead of failing: `DeadlineExceeded` after 4h with the internet up. `restartPolicy: Never` would not have kept that pod's logs)
 - ADR: `docs/adr/004-restic-b2-bckup.md`, `docs/adr/019-pushover-critical-alerts.md`
 - Runbook: `docs/runbooks/backup-verification.md`
 

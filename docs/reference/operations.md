@@ -222,6 +222,25 @@ repo is structurally sound, not that the data would load back into a
 running app. For the sampled-read and full test-restore procedures, see
 `docs/runbooks/backup-verification.md`.
 
+A failed backup Job usually has no pod left to read. To see where it
+stopped, check whether it restarted (a quick `exit 1` restarts the
+container, a hang doesn't) and how much it downloaded. `apk add --no-cache
+restic` fetches ~3 MB of package index before any package, ~18 MB in all,
+so a receive counter that goes flat below that means the install never
+finished. Run on control-node:
+
+```bash
+VM=$(kubectl -n monitoring get svc vmsingle-vm-victoria-metrics-k8s-stack -o jsonpath='{.spec.clusterIP}')
+POD='namespace="<ns>",pod=~"<job-name>.*"'
+# raw samples with timestamps: the [3m] window ending at <t>
+curl -s "http://$VM:8428/api/v1/query" --data-urlencode time=<t> \
+  --data-urlencode "query=container_network_receive_bytes_total{$POD}[3m]"
+curl -s "http://$VM:8428/api/v1/query" --data-urlencode time=<t> \
+  --data-urlencode "query=kube_pod_container_status_restarts_total{$POD}"
+```
+
+See `docs/lessons/backup/apk-add-hang-no-timeout.md`.
+
 ## Alerting
 
 Criticals go to Pushover and email, warnings to email, and `Watchdog` to

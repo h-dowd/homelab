@@ -182,60 +182,24 @@ Tell him it recurred and what that cost. Don't implement it unasked.
 
 ## 7. Document
 
-The canonical rules are in `docs/README.md`. If anything below seems to
-conflict with them, they win. This section applies them to alert work.
+Load `homelab-docs`. It has the routing table, the lesson template, the style
+rules and the revision pass. The cases alert work produces:
 
-### When, and where
-
-| What the triage found | Write | Where |
-|---|---|---|
-| A **new** failure mode: downtime, data risk, or over ~30 min of diagnosis | a new lesson from `docs/lessons/TEMPLATE.md` | `docs/lessons/<domain>/<short-kebab-name>.md` (domains: infra, k8s, networking, storage, backup), plus a row in `docs/lessons/README.md`, plus a one-paragraph entry in the right section of `docs/reference/gotchas.md` linking to it. All three, or it's a filing error |
-| A **known** failure mode recurring, same cause confirmed | a `## Recurrence: YYYY-MM-DD` section at the end of the existing lesson: what fired, the window, what differed, the commands run. Keep it short if nothing new was learned. It still counts, because the recurrence count is what prioritises prevention | the existing lesson. Update its `## Status` and its `docs/lessons/README.md` row ("Recurred YYYY-MM-DD") |
-| A known alert with a **different** cause | a new lesson, cross-linked both ways under `## Related` | as for a new failure mode |
-| The incident changes a risk's likelihood, cost or status | an `**Updated YYYY-MM-DD.**` paragraph in the item, plus the dated sentence in the file's opening changelog | `docs/reference/known-risks.md` |
-| An alert that is wrong (false positive, wrong threshold, wrong scope) | the rule fix (ask first), with a comment beside it saying why, and a lesson if it cost real time | `homelab-rules.yaml` or the values file |
-| A procedure you ran for the second time | a runbook, or a section in an existing one | `docs/runbooks/` plus its README row |
-| A command you had to work out that the next triage will need | add it to the relevant section | `docs/reference/operations.md` |
-| A manifest or rule fix | a comment beside the changed lines saying why. The lesson links the commit | the manifest |
-| A benign alert that matched a lesson exactly and needed no action | nothing, unless it's the 3rd+ time this quarter. Then a recurrence entry noting the frequency | — |
+| What the triage found | Write |
+|---|---|
+| a **new** failure mode: downtime, data risk, or over ~30 min of diagnosis | a new lesson, plus its `lessons/README.md` row and `gotchas.md` entry |
+| a **known** failure mode recurring, same cause confirmed | a `## Recurrence: YYYY-MM-DD` section on the existing lesson: what fired, the window, what differed, the commands run |
+| a known alert with a **different** cause | a new lesson, cross-linked both ways |
+| an alert that is **wrong** (false positive, wrong threshold, wrong scope) | the rule fix through `homelab-change` (ask first), with a comment beside it saying why, and a lesson if it cost real time |
+| a change to a risk's likelihood, cost or status | the `known-risks.md` update |
+| a command you had to work out that the next triage will need | a line in `docs/reference/operations.md`, Alerting |
+| a benign alert that matched a lesson exactly and needed no action | nothing, unless it's the 3rd+ time this quarter. Then a recurrence entry noting the frequency |
 
 Then check whether step 3's table in *this skill* needs a row. If you wrote a
 new lesson for an alert that will fire again, it does.
 
-### Style
-
-- **Use the template's headings, in order:** Date · Time lost · Status ·
-  Context · Symptoms · Investigation · Root cause · Fix · Verification ·
-  Prevention · Related. Recurrence sections reuse them as `###`.
-- **Run the revision pass** in `docs/reference/human-register-revision-guide.md`
-  §12 before committing. These are technical docs, so §11's exemptions apply:
-  bullets, tables and repeated key terms stay. Numbers, names, commands, alert
-  names and log lines are never reworded for style.
-- **Absolute dates (`YYYY-MM-DD`), times in UTC.** For `Europe/Dublin`
-  schedules give both (`03:00 Europe/Dublin = 02:00 UTC (IST)`). Never
-  "yesterday" or "last night".
-- **Evidence over narrative.** Real log lines in ` ```text ` blocks, trimmed to
-  the smoking gun. Real alert, pod and Job names, timestamps, and the commands
-  that actually ran.
-- **Say how you know.** Write "inferred from …, not from logs" where that's
-  true. Include the dead ends.
-- **Root cause is a mechanism**, not "it broke". Prevention takes a position:
-  a specific change, or "accepted risk" and why.
-- **No version numbers in docs.** Point at the manifest
-  (`grep -rn targetRevision k8s/`). Don't restate another doc. Link it.
-
-### Committing
-
-Commit only the files this triage touched, staged by path. Never use
-`git add -A` or `git commit -a`, because the working tree often holds Henry's
-unrelated work. Run `git status` / `git diff` before you edit. If a file you
-need already has his uncommitted hunks (gotchas.md and known-risks.md often
-do), `git add <file>` would take them too, and `git add -p` is interactive.
-Instead, apply the same edits to `git show HEAD:<file>` in the scratchpad, then
-`git update-index --cacheinfo 100644,$(git hash-object -w <tmp>),<file>`. Check
-with `git diff --cached`, and confirm `git diff` still shows his hunks.
-
-Messages follow `docs/README.md`: a terse lowercase one-liner,
-`docs: <what> -- <load-bearing why>`, e.g.
+Commit through `homelab-commit`: only the files this triage touched, staged by
+path around Henry's uncommitted work, with a message like
 `docs: kiwix oom recurrence 11-02 -- bot crawl again, cache bound holding`.
-Commit once the docs are written and verified. Ask before pushing.
+Commit once the docs are written and the alert is verified clear. Ask before
+pushing.

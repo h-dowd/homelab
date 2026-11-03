@@ -186,6 +186,27 @@ spec:
           annotations:
             summary: "A k3s node booted under 30 minutes ago; warnings are held back until then"
 
+        # Never delivered (null-routed in victoria-metrics.yaml). Source for
+        # the inhibit rule that mutes NodeRebooted and ProxmoxHostRestarted
+        # while ansible/upgrade.yml reboots things on purpose. On 2026-11-03
+        # it rebooted control and the worker two minutes apart, which
+        # ProxmoxHostRestarted can't tell from a host restart.
+        #
+        # The playbook writes the window's end straight into vmsingle
+        # (/api/v1/import/prometheus), not into Alertmanager, whose silences
+        # live in an emptyDir on the worker and are gone after the worker
+        # reboots. The sample is on vmsingle's Longhorn volume, so it
+        # survives. last_over_time because it is one sample, not a scraped
+        # series; 3h covers the longest window the playbook sets. The window
+        # ends on its own if the playbook dies, and value 0 closes it.
+        - alert: PlannedMaintenance
+          expr: |
+            max(last_over_time(homelab_maintenance_until_seconds[3h])) > time()
+          labels:
+            severity: none
+          annotations:
+            summary: "Planned maintenance until {{ $value | humanizeTimestamp }}; NodeRebooted and ProxmoxHostRestarted are muted"
+
     - name: homelab.storage
       rules:
         # 85% is high enough to ignore daily noise, low enough to act on. Both

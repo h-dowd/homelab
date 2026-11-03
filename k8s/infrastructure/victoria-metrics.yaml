@@ -138,11 +138,11 @@ spec:
                 # cluster ("cannot tolerate node failure" — true by design
                 # here). Null-routed rather than disabled so they stay
                 # visible in vmalert/Grafana without emailing every 6h.
-                # NodeRecentlyBooted only exists to feed the inhibit rule
-                # below.
+                # NodeRecentlyBooted and PlannedMaintenance only exist to
+                # feed the inhibit rules below.
                 - receiver: "null"
                   matchers:
-                    - alertname =~ "InfoInhibitor|NodeRecentlyBooted|KubeCPUOvercommit|KubeMemoryOvercommit"
+                    - alertname =~ "InfoInhibitor|NodeRecentlyBooted|PlannedMaintenance|KubeCPUOvercommit|KubeMemoryOvercommit"
 
                 # nextcloud-cron runs every 5 minutes and one run fails after
                 # every boot; the failed Job is kept 24h, so this emailed every
@@ -219,6 +219,12 @@ spec:
                 target_matchers:
                   - severity = "warning"
                   - alertname !~ "ProxmoxHostRestarted|NodeRebooted"
+                # The two exempted above, muted only while ansible/upgrade.yml
+                # has a maintenance window open (PlannedMaintenance in
+                # homelab-rules.yaml). Everything else behaves as usual.
+              - source_matchers: [alertname = "PlannedMaintenance"]
+                target_matchers:
+                  - alertname =~ "ProxmoxHostRestarted|NodeRebooted"
 
         # k3s bundles the controller-manager, scheduler, kube-proxy, and datastore
         # into the single k3s server process — none are exposed as the separately

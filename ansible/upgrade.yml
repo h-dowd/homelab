@@ -1,0 +1,129 @@
+---
+# Package upgrades for the Proxmox host and both k3s VMs. See README.md,
+# "Package upgrades".
+#
+#   ansible-playbook -i inventory.ini upgrade.yml --check --diff
+#   ansible-playbook -i inventory.ini upgrade.yml                  # upgrade only
+#   ansible-playbook -i inventory.ini upgrade.yml -e reboot=true   # and reboot what needs it
+#
+# Without -e reboot=true nothing reboots: the run reports which machines are
+# on an old kernel and stops.
+
+# Control, worker, then the host, one at a time, so a broken upgrade stops
+# the run on the machine that broke.
+- name: Upgrade packages
+  hosts: k3s_nodes:proxmox_hosts
+  gather_facts: true
+  serial: 1
+  roles:
+    - package_upgrade
+
+# One host reboot restarts both VMs on their new kernels, so when the host
+# needs one, the VMs aren't rebooted separately.
+- name: Reboot the Proxmox host
+  hosts: proxmox_hosts
+  gather_facts: false
+  tasks:
+    - name: Reboot the host if it needs it
+      when: reboot | default(false) | bool and upgrade_reboot_needed | bool
+      block:
+        # LXC {{ wireguard_ctid }} is the VPN, so the tunnel goes down with
+        # the host, and on 2026-09-03 it didn't autostart after a reboot
+        # (known-risks §9). From the LAN a failure there is an annoyance;
+        # from behind it, it is a lockout.
+        - name: Find whether this run reaches the host over WireGuard
+          ansible.builtin.shell: >-
+            set -o pipefail;
+            dev=$(ip route get {{ ansible_host }} | awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}');
+            ip -d link show "$dev" | grep -q wireguard
+          args:
+            executable: /bin/bash
+          delegate_to: localhost
+          register: upgrade_via_vpn
+          failed_when: false
+          changed_when: false
+          check_mode: false
+
+        - name: Refuse to reboot the host from behind the VPN
+          ansible.builtin.assert:
+            that: upgrade_via_vpn.rc != 0 or reboot_over_vpn | default(false) | bool
+            fail_msg: >-
+              This run reaches the host through WireGuard, which goes down
+              with it. Run from the LAN, or add -e reboot_over_vpn=true.
+
+        - name: Read the boot settings of the guests the cluster needs
+          ansible.builtin.command: "{{ item }}"
+          loop:
+            - "pct config {{ wireguard_ctid }}"
+            - "qm config {{ hostvars[groups['k3s_servers'][0]].proxmox_vmid }}"
+            - "qm config {{ hostvars[groups['k3s_agents'][0]].proxmox_vmid }}"
+          register: upgrade_guest_config
+          changed_when: false
+          check_mode: false
+
+        # onboot: a guest that doesn't autostart stays down until someone
+        # notices. down=300: the kubelet holds a VM's shutdown for 170s to
+        # stop pods in order, and Proxmox must not kill it first (see
+        # k3s_shutdown_grace_by_priority in group_vars/all.yml).
+        - name: Check the VPN and both VMs autostart, and the VMs get time to shut down
+          ansible.builtin.assert:
+            that:
+              - "upgrade_guest_config.results | map(attribute='stdout') | select('search', '(?m)^onboot: 1$') | list | length == 3"
+              - upgrade_guest_config.results[1:] | map(attribute='stdout') | select('search', 'down=300') | list | length == 2
+
+        - name: Reboot the host
+          ansible.builtin.reboot:
+            msg: "Rebooting for package upgrades (ansible upgrade.yml)"
+            reboot_timeout: 1800
+
+        - name: Wait for the VPN container to be running
+          ansible.builtin.command: "pct status {{ wireguard_ctid }}"
+          register: upgrade_vpn_status
+          until: "'status: running' in upgrade_vpn_status.stdout"
+          retries: 30
+          delay: 10
+          changed_when: false
+          check_mode: false
+
+        - name: Wait for the cluster
+          ansible.builtin.include_role:
+            name: package_upgrade
+            tasks_from: wait_cluster
+
+        - name: Record that the VMs were rebooted with the host
+          ansible.builtin.set_fact:
+            upgrade_host_rebooted: true
+
+# Reboots with k3s running. Stopping it first defeats the shutdown ordering:
+# systemd then has nothing to order, and the containers go down at the same
+# time as open-iscsi (gotchas.md, "k3s node operations").
+#
+# No drain. Control is tainted and every workload is pinned to the worker
+# (ADR 020), so drained pods would have nowhere to go. The kubelet's graceful
+# shutdown stops them in priority order instead.
+- name: Reboot the k3s VMs
+  hosts: k3s_nodes
+  gather_facts: false
+  serial: 1
+  tasks:
+    - name: Reboot the VM if it needs it
+      when: >-
+        reboot | default(false) | bool
+        and upgrade_reboot_needed | bool
+        and not hostvars[groups['proxmox_hosts'][0]].upgrade_host_rebooted | default(false)
+      block:
+        - name: Check k3s is running
+          ansible.builtin.command: >-
+            systemctl is-active {{ 'k3s' if inventory_hostname in groups['k3s_servers'] else 'k3s-agent' }}
+          changed_when: false
+          check_mode: false
+
+        - name: Reboot the VM
+          ansible.builtin.reboot:
+            msg: "Rebooting for package upgrades (ansible upgrade.yml)"
+            reboot_timeout: 900
+
+        - name: Wait for the cluster
+          ansible.builtin.include_role:
+            name: package_upgrade
+            tasks_from: wait_cluster

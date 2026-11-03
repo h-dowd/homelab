@@ -1,0 +1,54 @@
+---
+# After a VM or the host comes back: wait until the cluster is whole again.
+# Delegated to the control node, where kubectl lives. Read-only, so it runs
+# under --check too, which is what tests the queries.
+
+- name: Wait for both VMs to answer SSH
+  ansible.builtin.wait_for_connection:
+    timeout: 900
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['k3s_nodes'] }}"
+
+- name: Wait for every node to be Ready
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - nodes
+      - -o
+      - jsonpath={range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  register: upgrade_nodes
+  until: >-
+    upgrade_nodes.rc == 0
+    and upgrade_nodes.stdout_lines | length == groups['k3s_nodes'] | length
+    and upgrade_nodes.stdout_lines | reject('match', '.*=True$') | list | length == 0
+  retries: 60
+  delay: 10
+  changed_when: false
+  check_mode: false
+
+# After a reboot the volumes come back faulted ("Engine dead unexpectedly")
+# and Longhorn salvages them. That is bookkeeping, not recovery; on
+# 2026-10-08 it took ~3 min. See
+# docs/lessons/storage/planned-reboot-longhorn-killed-under-writes.md.
+- name: Wait for every Longhorn volume to be attached and healthy, or detached
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - -n
+      - longhorn-system
+      - get
+      - volumes.longhorn.io
+      - -o
+      - jsonpath={range .items[*]}{.metadata.name} {.status.state}/{.status.robustness}{"\n"}{end}
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  register: upgrade_volumes
+  until: >-
+    upgrade_volumes.rc == 0
+    and upgrade_volumes.stdout_lines | length > 0
+    and upgrade_volumes.stdout_lines | reject('search', ' (attached/healthy|detached/unknown)$') | list | length == 0
+  retries: 90
+  delay: 10
+  changed_when: false
+  check_mode: false

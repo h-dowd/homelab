@@ -1,0 +1,7 @@
+---
+# Held during the upgrade on Longhorn nodes unless -e upgrade_iscsi=true.
+# See tasks/main.yml for why.
+upgrade_iscsi: false
+upgrade_iscsi_packages:
+  - open-iscsi
+  - libopeniscsiusr

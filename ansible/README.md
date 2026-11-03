@@ -38,6 +38,44 @@ touches a running volume; the one handler that could disrupt things
 `roles/k3s_node/tasks/main.yml`. Changes to k3s flags need a deliberate
 restart during a window.
 
+## Package upgrades
+
+`upgrade.yml` runs `apt full-upgrade` on control, the worker and the Proxmox
+host, one at a time. It is the only playbook that targets the host. Nothing
+else here configures it.
+
+```bash
+cd ansible
+ansible-playbook -i inventory.ini upgrade.yml --check --diff
+ansible-playbook -i inventory.ini upgrade.yml                  # upgrade, no reboot
+ansible-playbook -i inventory.ini upgrade.yml -e reboot=true   # and reboot what needs it
+```
+
+None of the three machines upgrades itself: on 2026-11-03 none had
+unattended-upgrades installed. Without `-e reboot=true` nothing reboots. The
+run reports each machine's running and newest kernel, and stops. With it:
+
+- **If the host needs a reboot, only the host reboots.** That restarts both
+  VMs on their new kernels as well. The play first checks that LXC 101 and
+  both VMs have `onboot: 1` and the VMs have `down=300`. It refuses if the
+  run reaches the host over WireGuard, because the tunnel goes down with the
+  host and once did not come back (`docs/reference/known-risks.md` §9). Run it
+  from the LAN, or add `-e reboot_over_vpn=true`.
+- **Otherwise each VM that needs one reboots, control first.** k3s stays
+  running through the reboot and there is no drain. Why both:
+  `docs/reference/gotchas.md`, "k3s node operations".
+- After either, the run waits until both nodes are Ready and every Longhorn
+  volume is `attached/healthy`. Expect them to pass through `faulted` on the
+  way (`docs/lessons/storage/planned-reboot-longhorn-killed-under-writes.md`).
+
+**open-iscsi is held on the worker** unless `-e upgrade_iscsi=true`. Its
+postinst restarts `iscsid` under the mounted volumes. Upgrade it in a
+maintenance window. `roles/package_upgrade/tasks/main.yml` has the detail.
+
+"Needs a reboot" means a newer kernel is installed than the one running.
+Restarts that libraries or services want are not detected (no
+`needrestart`), and neither are the LXCs, which this doesn't upgrade.
+
 ## The first run, 2026-07-27
 
 Applied to both nodes. Re-running now reports `changed=0` on each, so this is

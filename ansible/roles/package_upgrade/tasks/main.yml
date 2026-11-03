@@ -1,0 +1,106 @@
+---
+# apt full-upgrade on one machine, and a record of whether it now needs a
+# reboot. It never reboots: which machine reboots depends on all three, so
+# that is upgrade.yml's call. full-upgrade rather than upgrade because
+# Proxmox requires it (a plain upgrade holds back new pve-* dependencies),
+# and the VMs gain nothing from the difference.
+
+# Refreshed even under --check. On 2026-11-03 both VMs' lists were two
+# months old and a simulation against them reported nothing to do. Updating
+# the lists changes no installed package.
+- name: Refresh the package lists
+  ansible.builtin.apt:
+    update_cache: true
+  check_mode: false
+  changed_when: false
+
+- name: Read existing holds
+  ansible.builtin.command: apt-mark showhold
+  register: upgrade_existing_holds
+  check_mode: false
+  changed_when: false
+
+# open-iscsi's postinst restarts iscsid on every upgrade
+# (`deb-systemd-invoke restart iscsid.service`), which on the worker is
+# under every mounted Longhorn volume. It raises recovery_tmo to 120s first
+# and is meant to ride that out, but this cluster has twice lost volumes to
+# iSCSI going away under writes (2026-07-25, 2026-10-08), so it is not
+# upgraded in passing. -e upgrade_iscsi=true includes it, in a window.
+#
+# Holds already set by hand are left out, so the release below cannot undo
+# them.
+- name: Work out which packages to hold for this run
+  ansible.builtin.set_fact:
+    upgrade_temp_holds: >-
+      {{ (upgrade_iscsi_packages
+          if inventory_hostname in groups['longhorn_nodes'] and not upgrade_iscsi | bool
+          else [])
+         | difference(upgrade_existing_holds.stdout_lines) }}
+
+# The holds and their release run under --check too, so the dry run shows
+# what the real one would do. If the run dies in between, the packages stay
+# held, which is the safe way round; `apt-mark unhold` clears it.
+- name: Upgrade with the iSCSI packages held
+  block:
+    - name: Hold packages that must not restart live
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: "{{ upgrade_temp_holds }}"
+      check_mode: false
+
+    # Changed conffiles keep the local version (the module's default
+    # force-confold); the maintainer's copy lands beside it as .dpkg-dist.
+    - name: Upgrade every package
+      ansible.builtin.apt:
+        upgrade: dist
+      register: upgrade_result
+  always:
+    - name: Release the temporary holds
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: install
+      loop: "{{ upgrade_temp_holds }}"
+      check_mode: false
+
+- name: List what was upgraded
+  ansible.builtin.debug:
+    msg: "{{ upgrade_result.stdout_lines | default([]) | select('match', '^(Inst|Setting up) ') | list }}"
+
+- name: List packages still waiting
+  ansible.builtin.shell: set -o pipefail; apt-get -s dist-upgrade | awk '/^Inst/ {print $2}'
+  args:
+    executable: /bin/bash
+  register: upgrade_waiting
+  changed_when: false
+  when: not ansible_check_mode
+
+# Debian writes no /run/reboot-required on a kernel install. That file comes
+# from unattended-upgrades or update-notifier, and none of the three
+# machines has either. So compare the running kernel to the newest in
+# /boot. Under --check this reflects kernels already installed, not the
+# ones the run would install. Not detected: services and libraries that
+# want a restart, because needrestart isn't installed either.
+- name: Find the newest installed kernel
+  ansible.builtin.shell: set -o pipefail; ls /boot/vmlinuz-* | sed 's|^/boot/vmlinuz-||' | sort -V | tail -n 1
+  args:
+    executable: /bin/bash
+  register: upgrade_newest_kernel
+  check_mode: false
+  changed_when: false
+
+- name: Check for a reboot-required flag
+  ansible.builtin.stat:
+    path: /run/reboot-required
+  register: upgrade_reboot_flag
+
+- name: Record whether a reboot is needed
+  ansible.builtin.set_fact:
+    upgrade_reboot_needed: "{{ upgrade_newest_kernel.stdout != ansible_facts['kernel'] or upgrade_reboot_flag.stat.exists }}"
+
+- name: Report
+  ansible.builtin.debug:
+    msg:
+      - "running kernel {{ ansible_facts['kernel'] }}, newest installed {{ upgrade_newest_kernel.stdout }}"
+      - "reboot needed: {{ upgrade_reboot_needed }}"
+      - "still waiting: {{ upgrade_waiting.stdout_lines | default([]) | join(' ') or 'nothing' }}"

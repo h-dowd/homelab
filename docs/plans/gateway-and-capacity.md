@@ -2,9 +2,9 @@
 
 *Drafted 2026-11-03. Not executed. Hardware shopping 2026-11-04.*
 
-Two pieces of work that share a shopping trip. Part A, the gateway, is the
-one this plan scopes in full. Part B, capacity, settles what to buy, and
-leaves a second worker to its own ADR if it is ever wanted.
+Two pieces of work that share a shopping trip. Part A is a gateway box for
+access. Part B moves the k3s VMs to an older box with more RAM, so AMP keeps
+the host's fast CPU.
 
 ## Shopping list
 
@@ -14,7 +14,7 @@ leaves a second worker to its own ADR if it is ever wanted.
 | Official PSU and a case with a fan | the gateway | under-voltage on a Pi shows up as flaky USB storage, which is the gateway's disk |
 | A smart plug with **local** control, no cloud needed | power-cycling the host from the gateway | e.g. Shelly Plug S, or anything Tasmota runs on. It must be switchable over the LAN with the internet down, since that's when it's needed |
 | A small UPS | router and gateway | covers short power cuts. The host has AC Recovery on (2026-10-08) and comes back by itself |
-| A used x86 mini PC, DDR4, 32GB | AMP now, maybe a worker VM later (Part B) | the 8th–10th gen business minis (OptiPlex/EliteDesk/ThinkCentre Micro) take DDR4 SODIMMs, which cost far less than the host's DDR5. Run Proxmox on it. Not the gateway: see Part B |
+| An older x86 box with lots of RAM, DDR3 is fine | the k3s VMs move onto it, AMP keeps the host (Part B) | **check `grep -o avx2 /proc/cpuinfo` on it before buying** (Part B). 1GbE. An SSD for the Longhorn disk. Runs Proxmox. Not the gateway |
 
 ## Part A: the gateway
 
@@ -150,51 +150,86 @@ mismatched and runs at 4800 MT/s. The board takes 64GB in two slots.
 `free` on the host: 19GB used, 3GB available. Every guest's allocation
 already adds up to more than the host has left.
 
-### Options
+### The split
 
 More RAM in the host is out: it takes DDR5 SODIMMs only, and they cost too
-much for this (Henry, 2026-11-03). So the capacity comes from a second box.
+much for this (Henry, 2026-11-03). The capacity comes from an older box with
+more, cheaper RAM, and the two boxes split by what suits each:
 
-1. **AMP moves to the second box, outside the cluster.** The box runs
-   Proxmox, and LXC 102 is restored onto it from a backup. That frees 5GiB
-   on the host, which the worker can take (13GiB → 18GiB), and AMP gets the
-   new box's RAM. Nothing in the cluster changes. This is the
-   recommendation.
-2. **The second box as a second k3s worker.** This buys redundancy as well
-   as capacity, but only if the design changes with it. It needs its own
-   ADR. Before choosing it, know that it means:
-   - **ADR 020 pins every workload to `k3s-worker1` by hostname.** A new
-     worker gets nothing until the pins become a label.
-   - **Longhorn runs one replica per volume** (`defaultReplicaCount: 1` in
-     `k8s/infrastructure/longhorn.yaml`). Redundancy needs two, across
-     boxes, and replica sync crosses the network.
-   - **The host's link is at 100 Mb/s** (known-risks §11, open action 19).
-     Fix that first, or replica rebuilds crawl.
-   - **It must be x86_64.** The self-built images are built for amd64.
-   - **The control plane stays on the host**, so the host is still the
-     single point of failure for the cluster.
+| Box | Runs | Why |
+|---|---|---|
+| The host (i5-14500T) | AMP, which grows into the freed RAM. Technitium | a game server is single-thread bound, and nothing in the cluster uses this CPU's speed |
+| The new box (older, more RAM) | VM 301, the worker. Later VM 300, control | the cluster wants RAM, not clock speed |
 
-Buying a box that runs Proxmox keeps both open: AMP goes on it now, and a
-worker VM can join it later if option 2 is ever wanted, after its ADR.
+Moving VM 301 frees 13GiB on the host for AMP. Moving VM 300 too frees
+another 4GiB, and then a host reboot for AMP no longer takes the cluster
+down.
 
-**Two standalone Proxmox hosts, not a Proxmox cluster.** A two-node Proxmox
-cluster loses quorum when either node is down, and then neither can start
-guests. Fixing that needs a third vote (a QDevice), which is more moving parts
-than this needs.
+### Move the VMs whole, not redesign the cluster
 
-**The AMP box is not the gateway.** AMP is a game server with ports open to
-players. The gateway holds the admin keys and should expose nothing but
-Tailscale. Keep them on separate hardware.
+Back VM 301 up with `vzdump` and restore it on the new box's Proxmox, with
+the same VMID, MAC and IP. Inside the VM nothing changes: hostname
+`k3s-worker1`, `192.168.1.11`, the ADR 020 pins and the Longhorn disk on
+`vdb` all carry over. No ADR is needed, because the design doesn't change,
+only the hardware under it.
 
-**Moving AMP touches:**
-- the `amp-external` EndpointSlice, which points Traefik at 192.168.1.15
-  (`docs/reference/architecture.md`). If the LXC keeps its IP on the new box,
-  nothing changes. If not, the slice and its Authelia rule move with it.
-- the router's port forwards for the game ports, if they target 192.168.1.15.
-- open action 17 (`fsck` `vm-102-disk-0`), which is easiest done during the
-  move, when the container is stopped anyway.
+- **The copy.** `vdb` holds 142GB of Longhorn data (`df /mnt/longhorn`,
+  2026-11-03), plus the 44GiB OS disk. Over the host's current 100 Mb/s link
+  (known-risks §11, open action 19) that's about 4–5 hours of worker
+  downtime. At 1 Gb/s it's about 25 minutes. **Fix the link first**, or
+  shuttle the backup on a USB disk.
+- **Shut down through the playbook's path.** Stop the worker with k3s
+  running, so the graceful shutdown applies (gotchas.md, "k3s node
+  operations"), before `vzdump` with `--mode stop`.
+- **Set the startup options by hand on the new host**: `onboot: 1`,
+  `startup: order=…,up=30,down=300`, `agent: 1`. The 300s matters, see
+  `k3s_shutdown_grace_by_priority` in `ansible/group_vars/all.yml`.
+- **The storage name.** `vdb` is on the host's `tank` pool. Name the new
+  box's storage `tank` too, or map it at restore time.
+- Delete the old copy on the host only after the restored worker has run
+  for a week.
+
+### Check the CPU before buying
+
+The worker runs with `cpu: host`, so it sees the i5-14500T's AVX2.
+Intel CPUs before Haswell (4th gen, 2013) don't have it, and that covers a
+lot of DDR3 hardware, including the Xeon E5 v1/v2 workstations that take the
+most DDR3. Nothing in the repo records which images need it. Before buying
+anything pre-Haswell, check the Immich requirements (the ML image and the
+vectorchord postgres), the heaviest images here. Haswell desktops and Xeon
+E3 v3 have AVX2 and still use DDR3, but top out at 32GB.
+
+Old hardware also costs power: an old tower idles at several times what the
+OptiPlex Micro does.
+
+### What changes in the repo
+
+- `ansible/upgrade.yml` assumes both VMs live on the one host: the host
+  reboot covers their kernels, and its guest checks run `qm config` there. It
+  needs a second Proxmox host in the inventory, and each VM to know which
+  host it's on.
+- `ProxmoxHostRestarted` reads "both VMs booted within an hour" as a host
+  restart. With the VMs on different hosts, that inference is wrong and the
+  rule needs rethinking.
+- `docs/reference/architecture.md`, `ansible/inventory.ini`'s VM sizes, and
+  the homelab-access guest table.
+
+### Rejected
+
+- **More DDR5 in the host.** Cost.
+- **The new box as a second worker** (two workers, replicas across boxes).
+  It buys redundancy as well as capacity, but the design changes with it:
+  ADR 020's hostname pins become a label, Longhorn goes from one replica to
+  two with sync over the network, and the control plane is still one VM.
+  Worth its own ADR if redundancy is ever the goal. Moving the VMs whole
+  doesn't rule it out later.
+- **AMP on the new box.** It would get the slower CPU, which is the one
+  thing a game server cares about.
+- **A two-node Proxmox cluster.** It loses quorum when either node is down,
+  and then neither starts guests. Two standalone hosts, each with its own
+  guests.
 
 ## On completion
 
-Mark this executed at the top, with links to the gateway ADR, and to the
-second-worker ADR if option 2 ever goes ahead.
+Mark this executed at the top, with links to the gateway ADR and to any
+lessons the VM move produced.

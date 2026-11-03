@@ -18,6 +18,25 @@
   roles:
     - package_upgrade
 
+# Mutes NodeRebooted and ProxmoxHostRestarted for the reboots below, and
+# nothing else. 2.5h covers the worst case of every wait in wait_cluster.yml
+# timing out in turn, and stays inside the rule's 3h lookback. If the run
+# dies, the window still ends then.
+- name: Open the maintenance window
+  hosts: k3s_servers
+  gather_facts: false
+  tasks:
+    - name: Open the window if anything is about to reboot
+      when: >-
+        reboot | default(false) | bool
+        and groups['homelab'] | map('extract', hostvars)
+            | map(attribute='upgrade_reboot_needed', default=false) | map('bool') | select | list | length > 0
+      ansible.builtin.include_role:
+        name: package_upgrade
+        tasks_from: maintenance
+      vars:
+        upgrade_maintenance_seconds: 9000
+
 # One host reboot restarts both VMs on their new kernels, so when the host
 # needs one, the VMs aren't rebooted separately.
 - name: Reboot the Proxmox host
@@ -127,3 +146,21 @@
           ansible.builtin.include_role:
             name: package_upgrade
             tasks_from: wait_cluster
+
+# Not closed outright: both alerts keep firing until the last boot is an
+# hour old, so ending the window now would send them as it lifted. 65 min
+# from the last wait outlasts them.
+- name: Shorten the maintenance window
+  hosts: k3s_servers
+  gather_facts: false
+  tasks:
+    - name: End the window once the reboot alerts have resolved
+      when: >-
+        reboot | default(false) | bool
+        and groups['homelab'] | map('extract', hostvars)
+            | map(attribute='upgrade_reboot_needed', default=false) | map('bool') | select | list | length > 0
+      ansible.builtin.include_role:
+        name: package_upgrade
+        tasks_from: maintenance
+      vars:
+        upgrade_maintenance_seconds: 3900

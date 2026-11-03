@@ -52,3 +52,23 @@
   delay: 10
   changed_when: false
   check_mode: false
+
+# Healthy nodes and volumes are not working apps. On 2026-11-03 this play
+# finished green with portfolio and file-parser in ImagePullBackOff: the
+# reboot made them re-pull, and the GitHub account rename had moved the
+# images. Prints only what isn't ready, so a timeout names the culprits.
+- name: Wait for every Deployment and StatefulSet to be ready
+  ansible.builtin.shell: >-
+    set -o pipefail;
+    kubectl get deployments,statefulsets -A
+    -o jsonpath='{range .items[*]}{.kind}/{.metadata.namespace}/{.metadata.name} {.spec.replicas} {.status.readyReplicas}{"\n"}{end}'
+    | awk '$2 > 0 && $2 != $3'
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  register: upgrade_workloads
+  until: upgrade_workloads.rc == 0 and upgrade_workloads.stdout == ""
+  retries: 90
+  delay: 10
+  changed_when: false
+  check_mode: false

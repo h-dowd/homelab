@@ -64,9 +64,20 @@ run reports each machine's running and newest kernel, and stops. With it:
 - **Otherwise each VM that needs one reboots, control first.** k3s stays
   running through the reboot and there is no drain. Why both:
   `docs/reference/gotchas.md`, "k3s node operations".
-- After either, the run waits until both nodes are Ready and every Longhorn
-  volume is `attached/healthy`. Expect them to pass through `faulted` on the
-  way (`docs/lessons/storage/planned-reboot-longhorn-killed-under-writes.md`).
+- After either, the run waits until both nodes are Ready, every Longhorn
+  volume is `attached/healthy`, and every Deployment and StatefulSet is
+  ready. Expect the volumes to pass through `faulted` on the way
+  (`docs/lessons/storage/planned-reboot-longhorn-killed-under-writes.md`).
+  The workload check came after the first run on 2026-11-03 finished green
+  with portfolio and file-parser down
+  (`docs/lessons/k8s/ghcr-owner-rename-imagepull-403.md`).
+- **`NodeRebooted` and `ProxmoxHostRestarted` are muted for the run**, and
+  nothing else is. Before the first reboot the play writes a window end
+  into vmsingle, which fires `PlannedMaintenance` and an inhibit rule in
+  Alertmanager. At the end it moves the end to 65 minutes out, because both
+  alerts fire for an hour after a boot. A run that dies leaves the window
+  to expire on its own, 2.5h after it opened. Why not a silence:
+  `PlannedMaintenance` in `k8s/apps/monitoring/homelab-rules.yaml`.
 
 **open-iscsi is held on the worker** unless `-e upgrade_iscsi=true`. Its
 postinst restarts `iscsid` under the mounted volumes. Upgrade it in a

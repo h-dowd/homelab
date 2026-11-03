@@ -1,0 +1,40 @@
+---
+# Sets when the maintenance window ends, as seconds from now (0 closes it).
+# While it is open, PlannedMaintenance fires and Alertmanager mutes
+# NodeRebooted and ProxmoxHostRestarted. Why a vmsingle sample and not a
+# silence: PlannedMaintenance in k8s/apps/monitoring/homelab-rules.yaml.
+#
+# Delegated to the control node, which can reach vmsingle's ClusterIP.
+# Skipped under --check. A written sample takes ~30s to become queryable
+# (vmsingle's -search.latencyOffset), which is well inside the 3.5-4.5 min
+# before a rebooted node's NodeRebooted can fire.
+
+- name: Find vmsingle
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - -n
+      - monitoring
+      - get
+      - svc
+      - vmsingle-vm-victoria-metrics-k8s-stack
+      - -o
+      - jsonpath={.spec.clusterIP}
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  register: upgrade_vmsingle
+  changed_when: false
+  check_mode: false
+
+# The end time comes from the control node's clock, the same clock vmalert's
+# time() is compared against.
+- name: Set the maintenance window to end in {{ upgrade_maintenance_seconds }}s
+  ansible.builtin.shell: >-
+    set -o pipefail;
+    s={{ upgrade_maintenance_seconds | int }};
+    until=$(( s > 0 ? $(date +%s) + s : 0 ));
+    printf 'homelab_maintenance_until_seconds{source="upgrade.yml"} %s\n' "$until"
+    | curl -sSf --max-time 10 --data-binary @- http://{{ upgrade_vmsingle.stdout }}:8428/api/v1/import/prometheus
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ groups['k3s_servers'][0] }}"
+  changed_when: true

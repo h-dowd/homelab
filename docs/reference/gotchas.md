@@ -899,3 +899,13 @@ prevent: the role was correct, the runbook documented it, and known-risks
 listed it as owned — but nothing had ever executed it. `--check --diff`
 compares declared against live and is the only thing that closes the gap.
 See known-risks §6.
+
+**A running pod doesn't prove its image can still be pulled.** The kubelet
+only asks the registry when it creates a pod, so a broken image reference
+waits for the next reboot or rollout. With `imagePullPolicy: Always` a
+cached image doesn't help. On 2026-11-03 the GitHub account rename
+(`hpdowd` → `h-dowd`) had already made `ghcr.io/hpdowd/*` answer 403, and
+portfolio and file-parser went down only when an `upgrade.yml` worker
+reboot recreated them. After renaming an account or changing a package's
+visibility, check every `ghcr.io/` reference in `k8s/`. See
+`docs/lessons/k8s/ghcr-owner-rename-imagepull-403.md`.

@@ -249,7 +249,7 @@ facts live here.
   wired via `VM_URL`/`GITEA_URL`/`GITEA_REPO` env in the deployment, so
   a compromise of the public pod leaks nothing.
 - **Self-built image, not upstream:** GitHub Actions builds it and
-  pushes to GHCR (`ghcr.io/hpdowd/portfolio`), pulled anonymously like
+  pushes to GHCR (`ghcr.io/h-dowd/portfolio`), pulled anonymously like
   Immich. The in-cluster runner can't build it (no daemon in-job, see
   gotchas.md); the build rides the GitHub push-mirror. See ADR 008/009.
 - **Self-monitored:** a `VMServiceScrape` targets `:9090/metrics`, so

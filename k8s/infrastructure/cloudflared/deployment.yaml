@@ -28,7 +28,10 @@ spec:
           # Pinned: this is the public ingress path — a silently-pulled new
           # :latest on a pod restart is the wrong time to discover a breaking
           # change. Bump deliberately.
-          image: cloudflare/cloudflared:2026.6.0
+          # 2026-11-03: Cloudflare's eMudhra weak-key advisory (2026-10-20)
+          # requires >= 2026.10.2 for tunnels. RELEASE_NOTES and CHANGES.md
+          # from 2026.6.0 on list no breaking change for `tunnel run --token`.
+          image: cloudflare/cloudflared:2026.10.7
           args:
             - tunnel
             - --no-autoupdate

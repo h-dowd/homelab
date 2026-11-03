@@ -8,7 +8,7 @@ description: Triage, fix and write up any firing homelab alert (memory, workload
 ## 0. Access
 
 Load the `homelab-access` skill. `kubectl` runs on `ssh control-node`, never on
-the laptop. Batch several commands into one `ssh` call. Each connection can
+the workstation. Batch several commands into one `ssh` call. Each connection can
 need its own 1Password approval.
 
 - **SSH stalls after `Server accepts key`, or fails with `agent refused

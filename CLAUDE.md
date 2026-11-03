@@ -42,7 +42,8 @@ Load the one that fits before starting. Most tasks need more than one.
 2. **Never `pct enter` or `pct console` LXC 101 or 102 while on the VPN.** It
    wedges the container in D-state and only a host hard-reboot recovers it.
    Use `pct exec`. Details in `homelab-access`.
-3. **`kubectl` runs on `ssh control-node`.** The laptop doesn't have it.
+3. **`kubectl` runs on `ssh control-node`, not on the workstation.** What the
+   workstation needs is in `homelab-access`.
 4. **Ask before anything outward-facing or hard to undo:** `git push`,
    rewriting history that is already on the remote, a manifest or rule change
    to the live cluster, silences, reboots of a node, VM or the host, deleting

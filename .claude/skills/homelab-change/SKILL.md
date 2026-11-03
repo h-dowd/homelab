@@ -87,7 +87,7 @@ above applied on top.
 
 ## 5. Validate before asking to push
 
-No `kubeconform`, `kubeseal` or `ansible-playbook` on the laptop. CI runs
+`kubeconform` isn't on the workstation (`homelab-access`). CI runs
 kubeconform on push, which is after the fact. Before that:
 
 ```bash

@@ -29,7 +29,29 @@ ssh pve "qm guest exec <vmid> -- sh -c 'echo \"$(cat ~/.ssh/p1.pub)\" >> /root/.
 
 `ssh-copy-id` won't work: sshd is `PermitRootLogin prohibit-password`.
 
-`kubectl` is **not** installed on the laptop. Run it on the control node:
+## The workstation
+
+Whatever machine the session runs on. Don't assume which one. Check for what
+the task needs before relying on it.
+
+| Needs | For | Check |
+|---|---|---|
+| `ssh` with the three aliases above and the 1Password SSH agent | every shell, Ansible, commit signing | `ssh -o BatchMode=yes control-node true` |
+| `git`, signing through the same agent | every commit | `git config --get commit.gpgsign` |
+| `ansible-core` | `ansible/` | `ansible-playbook --version`. Without a package manager: `python3 -m venv <dir> && <dir>/bin/pip install ansible-core` |
+| `python3`, `curl`, `dig` | dry-run checks, registry and Cloudflare-edge tests | `command -v python3 curl dig` |
+| the `homelab` WireGuard profile | reaching 192.168.1.x from off the LAN | `nmcli connection show homelab` |
+
+Not on the workstation, by design: `kubectl` (below) and `kubeconform` (CI).
+`kubeseal` is on `control-node`, because operations.md pipes
+`kubectl create secret … --dry-run=client` straight into it. `site.yml`
+installs it (`ansible/roles/kubeseal`).
+
+**Is it on the LAN?** `ip route get 192.168.1.2`. A `dev` that is a WireGuard
+interface means the session reaches the homelab through LXC 101, so anything
+that takes the host down takes the session with it.
+
+`kubectl` runs on the control node:
 `ssh control-node 'kubectl …'`. SSH into the worker only when the thing you need
 is not visible through the API (containerd, disk, `/mnt/longhorn`, journal).
 

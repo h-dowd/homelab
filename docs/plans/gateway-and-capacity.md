@@ -14,7 +14,7 @@ the host's fast CPU.
 | Official PSU and a case with a fan | the gateway | under-voltage on a Pi shows up as flaky USB storage, which is the gateway's disk |
 | A smart plug with **local** control, no cloud needed | power-cycling the host from the gateway | e.g. Shelly Plug S, or anything Tasmota runs on. It must be switchable over the LAN with the internet down, since that's when it's needed |
 | A small UPS | router and gateway | covers short power cuts. The host has AC Recovery on (2026-10-08) and comes back by itself |
-| An older x86 box with lots of RAM, DDR3 is fine | the k3s VMs move onto it, AMP keeps the host (Part B) | **check `grep -o avx2 /proc/cpuinfo` on it before buying** (Part B). 1GbE. An SSD for the Longhorn disk. Runs Proxmox. Not the gateway |
+| An older x86 box that takes the spare DDR4 sticks, with ECC working | the k3s VMs move onto it, AMP keeps the host (Part B) | which box depends on the sticks: registered (RDIMM) or unbuffered ECC (UDIMM), see "The spare DDR4" in Part B. 1GbE. An SSD for the Longhorn disk. Runs Proxmox. Not the gateway |
 
 ## Part A: the gateway
 
@@ -201,6 +201,51 @@ E3 v3 have AVX2 and still use DDR3, but top out at 32GB.
 
 Old hardware also costs power: an old tower idles at several times what the
 OptiPlex Micro does.
+
+### The spare DDR4
+
+A co-worker's DDR4 sticks, free, some with uncorrectable ECC errors on some
+pages (2026-11-03). They decide the platform, and they bring a risk.
+
+**The risk.** The worker holds the only copy of every Longhorn volume
+(`defaultReplicaCount: 1`), including three postgres databases. Bad RAM
+there doesn't only crash things. It can write corrupted data to disk, and
+the nightly restic job then backs up the corruption. The faster this kind of
+memory fails, the better, so the box needs ECC that actually works.
+
+- **"Uncorrectable" means ECC can't fix it.** An uncorrectable error
+  (`Hardware Error … uncorrected` in the kernel log) raises a machine check.
+  On a hypervisor that usually takes down the whole box, so every VM on it
+  goes too. A correctable error is fixed, logged, and an early warning.
+- **Retire any stick that shows an uncorrectable error under test.** Don't
+  map around it with `memmap=` or GRUB's `badram`: the bad addresses move
+  when sticks change slots or the population changes, so the exclusion
+  silently stops covering them.
+- **Burn in each stick before it holds data.** Run memtest86+ for at least
+  four full passes, one stick at a time, so a failure names the stick. Then
+  test the final set together.
+- **Only on a board where ECC is active.** Many consumer boards accept ECC
+  UDIMMs and ignore the ECC bits: no correction, no reporting. With sticks
+  known to be marginal, that's the worst case. Check with `edac-util -v` (or
+  `rasdaemon`) after install: it should list the memory controller and its
+  error counts.
+- **Watch the correctable count.** The host-level metrics don't exist yet
+  (the same gap as open action 14, `pve/data` `Data%`): node-exporter runs
+  inside the VMs and can't see the host's EDAC counters. A rising
+  correctable count is the signal to pull a stick before it turns
+  uncorrectable.
+
+**Which box the sticks need.** Read the label or the SPD:
+
+| Sticks | Platform that runs them with ECC | Notes |
+|---|---|---|
+| Registered (RDIMM / LRDIMM) | Xeon E5 v3/v4 workstation: Dell Precision T5810/T7810, HP Z440/Z640, Lenovo P510 | 8 slots, so the most RAM. AVX2 (Haswell-EP and later). Idle power around 60–100W |
+| Unbuffered ECC (UDIMM, "ECC" with no "R") | Xeon E3 v5/v6 or E-2100/2200 workstation: Dell Precision 3420/3430/3630, HP Z240/Z2 G4 | 4 slots, up to 64GB. AVX2. Lower idle power |
+| Either, in a desktop board without ECC support | don't | RDIMMs won't boot, and UDIMMs run with ECC off |
+
+Every one of these is Haswell or newer, so the AVX2 check above passes
+automatically. Pentium and Celeron parts of the same years are the
+exception: they lack AVX2, so stick to Core or Xeon.
 
 ### What changes in the repo
 

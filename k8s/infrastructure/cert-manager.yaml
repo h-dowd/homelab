@@ -10,7 +10,12 @@ spec:
     chart: cert-manager
     # Pinned exactly (same reasoning as traefik.yaml) — verified via
     # `helm search repo jetstack/cert-manager` 2026-06-12.
-    targetRevision: v1.20.2
+    # 2026-11-03: v1.20.5 for the eMudhra intermediate-key compromise
+    # (2026-10-19). Its Debian 13 base drops the emSign G3 / AAA roots and
+    # Go 1.26.10 rejects chains through the bad intermediates, so a forged
+    # cert can't MITM the controller's calls to the Cloudflare API (DNS:Edit
+    # token) or Let's Encrypt. Chart values.yaml identical to v1.20.2.
+    targetRevision: v1.20.5
     helm:
       values: |
         crds:

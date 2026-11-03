@@ -1,0 +1,70 @@
+---
+# kubeseal on the control node, where operations.md's Sealed Secrets
+# procedure runs (`kubectl create secret … --dry-run=client | kubeseal`).
+# Until 2026-11-03 it was installed nowhere, so that procedure failed at the
+# pipe.
+#
+# No version here. The client should match the controller, and the
+# controller's version comes from the chart pinned in
+# k8s/infrastructure/sealed-secrets.yaml, so the role reads the running
+# controller's image tag and installs that. After a controller bump, re-run
+# site.yml to follow it.
+
+- name: Read the running controller's version
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - -n
+      - kube-system
+      - get
+      - deployment
+      - sealed-secrets-controller
+      - -o
+      - jsonpath={.spec.template.spec.containers[0].image}
+  register: kubeseal_controller_image
+  changed_when: false
+  check_mode: false
+
+- name: Read the installed kubeseal version
+  ansible.builtin.command: /usr/local/bin/kubeseal --version
+  register: kubeseal_installed
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Work out what to install
+  ansible.builtin.set_fact:
+    kubeseal_version: "{{ kubeseal_controller_image.stdout.split(':') | last }}"
+
+# Checked against the release's checksums file. The project moved from
+# bitnami-labs to bitnami on 2026-06-15 (known-risks), so this is the new org.
+- name: Download kubeseal {{ kubeseal_version }}
+  ansible.builtin.get_url:
+    url: "https://github.com/bitnami/sealed-secrets/releases/download/v{{ kubeseal_version }}/kubeseal-{{ kubeseal_version }}-linux-amd64.tar.gz"
+    checksum: "sha256:https://github.com/bitnami/sealed-secrets/releases/download/v{{ kubeseal_version }}/sealed-secrets_{{ kubeseal_version }}_checksums.txt"
+    dest: "/tmp/kubeseal-{{ kubeseal_version }}.tar.gz"
+    mode: "0644"
+  when: kubeseal_version not in kubeseal_installed.stdout | default('')
+
+- name: Install kubeseal {{ kubeseal_version }}
+  ansible.builtin.unarchive:
+    src: "/tmp/kubeseal-{{ kubeseal_version }}.tar.gz"
+    dest: /usr/local/bin
+    remote_src: true
+    include: [kubeseal]
+    owner: root
+    group: root
+    mode: "0755"
+  # Under --check the download above didn't happen, so there's nothing to
+  # unpack.
+  when: kubeseal_version not in kubeseal_installed.stdout | default('') and not ansible_check_mode
+
+# kubeseal reads ~/.kube/config. kubectl here is k3s's own, which finds
+# /etc/rancher/k3s/k3s.yaml without one, so kubeseal failed with "no
+# configuration has been provided". A link, not a copy: k3s rewrites that
+# file on every restart.
+- name: Point ~/.kube/config at the k3s kubeconfig
+  ansible.builtin.file:
+    src: /etc/rancher/k3s/k3s.yaml
+    dest: /root/.kube/config
+    state: link

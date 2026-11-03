@@ -26,3 +26,10 @@
     # data disk, which is exactly what data_disk needs. Runs second so the
     # k3s-agent drop-in directory already exists.
     - data_disk
+
+# Tools for working on the cluster, on the node where kubectl is.
+- name: Control-node tools
+  hosts: k3s_servers
+  gather_facts: false
+  roles:
+    - kubeseal

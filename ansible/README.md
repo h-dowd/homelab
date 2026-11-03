@@ -19,6 +19,7 @@ Helm cannot reach:
 | `common` | journald size cap, inotify limits | OS-level; both predate the cluster |
 | `k3s_node` | `/etc/rancher/k3s/config.yaml`, kubelet graceful shutdown drop-in | k3s and the kubelet read them at process start, before any workload exists |
 | `longhorn_node` | `k3s-agent` ↔ iSCSI shutdown ordering | systemd unit ordering on the host |
+| `kubeseal` | the `kubeseal` client on control, matching the running controller, and `/root/.kube/config` for it | a tool on the node, not a workload |
 | `data_disk` | containerd + local-path directories on `vdb`, the bind mount and its ordering | a mount unit on the host; the kubelet is downstream of it |
 
 It does **not** manage: Proxmox VM definitions (see Non-goals), k3s

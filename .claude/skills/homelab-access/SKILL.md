@@ -7,8 +7,8 @@ description: How to reach the homelab machines — the `ssh pve` / `ssh control-
 
 ## SSH aliases
 
-Three aliases in `~/.ssh/config`, all `root`, all port 22, all keyed with
-`~/.ssh/p1.pub` via the 1Password SSH agent:
+Three aliases in `~/.ssh/config`, all `root`, all port 22. Which key backs them
+depends on where the session runs (see "Keys" below):
 
 | Alias | Host | What it is |
 |---|---|---|
@@ -18,6 +18,27 @@ Three aliases in `~/.ssh/config`, all `root`, all port 22, all keyed with
 
 Always use the alias; the k8s node names (`k3s-control`, `k3s-worker1`) are
 not SSH hosts and don't resolve.
+
+### Keys
+
+| Session runs as | Key | Notes |
+|---|---|---|
+| Henry's workstation | `p1`, served by the 1Password SSH agent (`~/.ssh/p1.pub` names it) | also signs commits. Never copy it anywhere |
+| the `claude` user on `pve` (added 2026-11-17) | `~/.ssh/claude_homelab`, ed25519, no passphrase, comment `claude@pve` | no agent. `~/.ssh/config` there matches each alias and its IP, and uses `IdentitiesOnly` and `StrictHostKeyChecking accept-new` |
+
+The `claude@pve` key is in root's `authorized_keys` on all three hosts as
+`from="192.168.1.2" ssh-ed25519 … claude@pve`, so it only works from pve. From
+the `claude` user, `ssh pve` goes over loopback and lands in a root shell on the
+hypervisor. Treat that as Henry's standing grant for this key, not a reason to
+widen it, and still ask before anything on CLAUDE.md's hard-rule 4 list.
+Commits made from this user aren't signed, because no agent holds `p1`
+(`commit.gpgsign` is unset there). Ansible from this user needs
+`-e ansible_ssh_private_key_file=~/.ssh/claude_homelab`, because
+`ansible/inventory.ini` names `~/.ssh/p1.pub`, which doesn't exist here.
+
+Henry revokes it on each host with
+`sed -i '/claude@pve/d' /root/.ssh/authorized_keys`. Don't put it on other
+machines (the LXCs, the router, the gateway box) unless Henry asks.
 
 To put p1.pub on a VM that doesn't have it, go through the QEMU guest agent
 (enabled on 300 and 301) rather than typing it out — this is how the worker got
@@ -36,7 +57,7 @@ the task needs before relying on it.
 
 | Needs | For | Check |
 |---|---|---|
-| `ssh` with the three aliases above and the 1Password SSH agent | every shell, Ansible, commit signing | `ssh -o BatchMode=yes control-node true` |
+| `ssh` with the three aliases above and a key from "Keys" | every shell, Ansible, commit signing (`p1` only) | `ssh -o BatchMode=yes control-node true` |
 | `git`, signing through the same agent | every commit | `git config --get commit.gpgsign` |
 | `ansible-core` | `ansible/` | `ansible-playbook --version`. Without a package manager: `python3 -m venv <dir> && <dir>/bin/pip install ansible-core` |
 | `python3`, `curl`, `dig` | dry-run checks, registry and Cloudflare-edge tests | `command -v python3 curl dig` |

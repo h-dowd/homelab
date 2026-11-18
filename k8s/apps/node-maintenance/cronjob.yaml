@@ -8,9 +8,14 @@
 # 15 of them after the 2026-10-08 test reboot (see the lesson
 # storage/planned-reboot-longhorn-killed-under-writes.md).
 #
-# Matches on the reason AND the message, not just phase=Failed. A plain
-# `--field-selector=status.phase=Failed` delete would also take failed Job
-# pods, and a failed backup's pod logs are exactly what you want to keep.
+# Matches the DisruptionTarget condition the kubelet sets, reason
+# TerminationByKubelet, not the phase or the message (changed 2026-11-18). A pod
+# whose app exits 0 on SIGTERM ends up phase Succeeded with no reason or
+# message, and most do: the old Failed + "imminent node shutdown" match found 0
+# while 76 sat there from every reboot since May. Job-owned pods are skipped
+# either way, because a failed backup's pod logs are exactly what you want to
+# keep, and the Jobs' history limits already cap them. Ownerless pods (a
+# hand-run `kubectl run`) are left alone too.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -48,10 +53,16 @@ spec:
               args:
                 - |
                   set -eu
-                  kubectl get pods -A --field-selector=status.phase=Failed -o json \
+                  # Failed or Succeeded: a field selector can't OR, so exclude the rest.
+                  kubectl get pods -A \
+                      --field-selector=status.phase!=Running,status.phase!=Pending,status.phase!=Unknown \
+                      -o json \
                     | jq -r '.items[]
-                        | select(.status.reason == "Terminated"
-                                 and ((.status.message // "") | test("imminent node shutdown")))
+                        | select(any(.status.conditions[]?;
+                                     .type == "DisruptionTarget"
+                                     and .reason == "TerminationByKubelet"))
+                        | select(any(.metadata.ownerReferences[]?; .kind == "Job") | not)
+                        | select((.metadata.ownerReferences // []) != [])
                         | "\(.metadata.namespace) \(.metadata.name)"' \
                     > /tmp/leftovers
                   echo "$(wc -l < /tmp/leftovers) pod(s) left over from node shutdown"

@@ -64,4 +64,8 @@
   sources are the same machines that already hold root keys.
 - **A larger `pve/data` thin pool.** The disk cap bounds the growth;
   known-risks §10 still applies.
+- **LXC 101 is the exception.** It is Alpine, with busybox `syslogd` and no
+  journal, so it sends UDP syslog to the same store (found 2026-11-18,
+  `docs/plans/central-logging.md` §3b). UDP has no buffer: lines sent while
+  the store is down exist only in its `/var/log/messages`.
 - **Claude can diagnose pve from its logs without a shell on pve.**

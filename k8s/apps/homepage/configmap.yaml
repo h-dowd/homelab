@@ -102,8 +102,6 @@ data:
             href: http://technitium.lan
             description: DNS · LAN only
             icon: technitium.png
-        # Added as it goes live:
-        # - Vaultwarden: { href: https://vault.henrydowd.dev, description: Passwords }
 
   bookmarks.yaml: |
     - Reference:

@@ -115,7 +115,7 @@ slower RTO than I'm willing to wear for the photo library.
 - **A tested restore that's too slow.** If a B2 restore of immich or nextcloud
   turns out to be an RTO I can't live with, `Retain` (fast local re-bind) earns its
   keep as the quick path, with restic as the disaster floor beneath it.
-- **More stateful apps.** vaultwarden (in flight) and anything after it should get
+- **More stateful apps.** anything stood up after this should get
   the same Layer-1 treatment as part of standing them up, not bolted on later.
 
 ## Related

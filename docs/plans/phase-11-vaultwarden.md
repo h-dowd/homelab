@@ -1,5 +1,10 @@
 # Phase 11: Vaultwarden household password manager walkthrough
 
+**Dropped 2026-11-18, never built.** Passwords live in 1Password on a work-paid
+plan, so there is no vault to self-host. The placeholder `vaultwarden`
+Application and its empty namespace were removed the same day. ADR 016 was
+never written. Kept as a reference in case that changes.
+
 *Drafted 2026-07-22. Pin the exact `vaultwarden/server:<x>-alpine` release
 before deploying — the admin-token format (now argon2 PHC) and the built-in
 WebSocket handling changed across 1.2x/1.3x. Verify env keys against the
